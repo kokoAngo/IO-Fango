@@ -136,6 +136,39 @@
     @keyframes fadein { to { opacity: 1; } }
     @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
     @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+    /* ─── Phone (≤640px): the wide-spaced wordmark overflows on small viewports.
+       Tighten everything so it fits on iPhone-mini-class screens (~320 CSS px). */
+    @media (max-width: 640px) {
+      .stage { padding: 16px 12px; }
+      .brand-glyph {
+        font-size: 11px;
+        letter-spacing: 0.25em;
+        padding: 8px 14px;
+        margin-bottom: 40px;
+        max-width: 100%;
+        white-space: normal;
+      }
+      .typewriter { padding: 16px 18px; max-width: 100%; }
+      .typewriter p          { font-size: clamp(13px, 4.0vw, 18px); line-height: 1.65; }
+      .typewriter p.bold     { font-size: clamp(17px, 5.4vw, 24px); }
+      .enter-wrap { margin-top: 48px; }
+      .btn-enter {
+        padding: 12px 22px;
+        font-size: 12px;
+        letter-spacing: 0.25em;
+      }
+      .btn-enter::before,
+      .btn-enter::after { margin: 0 8px; }
+      .skip { top: 12px; right: 12px; font-size: 10px; }
+      .corner, .corner-right {
+        font-size: 9px; bottom: 10px;
+        max-width: 45vw;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .corner       { left: 12px; }
+      .corner-right { right: 12px; }
+    }
   </style>
 </head>
 <body>

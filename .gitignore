@@ -25,3 +25,10 @@ htmlcov/
 
 # Claude Code session state.
 .claude/
+
+# Debug / screenshot dumps from issue reports.
+IMG_*.PNG
+IMG_*.png
+oldName.png
+截屏*.png
+Screenshot*.png
