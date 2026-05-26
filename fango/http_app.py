@@ -210,20 +210,43 @@ class TimingMiddleware:
 
 
 def _build_app() -> FastAPI:
+    from contextlib import asynccontextmanager
+
     bootstrap()
-    app = FastAPI(title="IO.Fango")
+
+    # Resolve the MCP instance once so the lifespan can run its session
+    # manager. The Streamable HTTP transport needs an active task group in
+    # the surrounding app's lifespan — Starlette's Mount does not propagate
+    # the child app's lifespan, so we wire it explicitly here.
+    mcp_instance = None
+    try:
+        from .mcp_server import get_mcp
+        mcp_instance = get_mcp()
+    except Exception as exc:  # pragma: no cover
+        log.warning("MCP server unavailable: %s", exc)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if mcp_instance is not None:
+            async with mcp_instance.session_manager.run():
+                yield
+        else:
+            yield
+
+    app = FastAPI(title="IO.Fango", lifespan=lifespan)
     app.add_middleware(AgentKeyMiddleware)
     app.add_middleware(McpHostAllowlistMiddleware)
     app.add_middleware(TimingMiddleware)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-    # Try to mount MCP SSE under /mcp; if unavailable, skip.
-    try:
-        from .mcp_server import get_mcp
-        sse_app = get_mcp().sse_app()
-        app.mount("/mcp", sse_app)
-    except Exception as exc:  # pragma: no cover
-        log.warning("MCP SSE app not mounted: %s", exc)
+    # Two transports mounted side-by-side:
+    # /mcp/sse + /mcp/messages/ — classic SSE transport (requires client to
+    #   keep the GET stream open while POSTing messages on the side).
+    # /mcp2/mcp — modern Streamable HTTP transport (single POST endpoint,
+    #   no long-lived stream; better for HTTP clients that don't keep SSE).
+    if mcp_instance is not None:
+        app.mount("/mcp", mcp_instance.sse_app())
+        app.mount("/mcp2", mcp_instance.streamable_http_app())
 
     _register_routes(app)
     return app
@@ -250,18 +273,31 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/", response_class=HTMLResponse)
     async def home(request: Request):
         cat = wk.catalog()
+        recent = _recent_posts_across_forums()
         ctx = shared_ctx(request, active_nav="home")
         ctx.update({
             "counts": cat["thread_counts"],
             "listing_count": cat["listing_count"],
             "active_agents": cat["active_agents"],
-            "recent_posts": _recent_posts_across_forums(),
+            "recent_posts": recent,
+            "authors": _resolve_authors(r["post"].author_id for r in recent),
         })
         return templates.TemplateResponse(request, "home.html", ctx)
 
     @app.get("/fangobook/skill.md", response_class=PlainTextResponse)
-    async def skill_md():
-        return SKILL_MD_PATH.read_text(encoding="utf-8")
+    async def skill_md(request: Request):
+        # Render via jinja so {{ base_url }} reflects however the agent reached us.
+        from .agent_admin import _skill_version
+        base_url = f"{request.url.scheme}://{request.url.netloc}"
+        ver = _skill_version()
+        rendered = templates.env.from_string(
+            SKILL_MD_PATH.read_text(encoding="utf-8")
+        ).render(
+            base_url=base_url,
+            skill_version=ver["version"],
+            skill_updated_at=ver["updated_at"],
+        )
+        return PlainTextResponse(rendered, media_type="text/markdown; charset=utf-8")
 
     @app.get("/intro", response_class=HTMLResponse)
     async def landing(request: Request):
@@ -418,9 +454,11 @@ def _register_routes(app: FastAPI) -> None:
             return await wiki_index(request, q)
         svc = _service_or_404(forum)
         threads = svc.list_threads()
+        recent = _recent_posts_in_forum(forum)
         ctx = shared_ctx(request, active_forum=forum)
         ctx.update({"forum": forum, "threads": threads, "tag": None, "q": q,
-                    "recent_posts": _recent_posts_in_forum(forum)})
+                    "recent_posts": recent,
+                    "authors": _resolve_authors(r["post"].author_id for r in recent)})
         return templates.TemplateResponse(request, "forum_index.html", ctx)
 
     @app.get("/{forum}/tag/{tag}", response_class=HTMLResponse)

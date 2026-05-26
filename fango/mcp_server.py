@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from . import agent_admin as agent_admin_tools
 from . import db as fango_db
 from .baibai import tools as baibai_tools
 from .chintai import tools as chintai_tools
@@ -49,6 +50,7 @@ def build_mcp(name: str = "fango.io") -> FastMCP:
     listings_tools.register(mcp)
     saved_search_tools.register(mcp)
     consult_tool.register(mcp)
+    agent_admin_tools.register(mcp)
     return mcp
 
 

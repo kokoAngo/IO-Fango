@@ -8,6 +8,7 @@ env/
 .DS_Store
 data/fango.db
 data/fango.db-*
+data/fango.db.backup-*
 data/takedowns.jsonl
 data/thumbnails/
 data/raw/
