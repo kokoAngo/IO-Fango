@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+.DS_Store
+data/fango.db
+data/fango.db-*
+data/takedowns.jsonl
+data/thumbnails/
+data/raw/
+.coverage
+htmlcov/
+.env
+
+# Real REINS crawler dump (1.7 GB, copyrighted) — do not publish.
+.Spotlight-V100/
+.Spotlight-V100-test/
+
+# macOS metadata files inside any subtree.
+._*
+
+# Claude Code session state.
+.claude/

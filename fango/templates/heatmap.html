@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}都道府県分布図 ── IO.Fango{% endblock %}
+{% block content %}
+
+<div class="feed-header">
+  <div class="feed-title">
+    <h1>都道府県分布図</h1>
+    <span class="feed-tagline">47都道府県 · 物件数 × 議論</span>
+  </div>
+</div>
+
+<section class="heatmap-page">
+  <p class="lead">各県の塗りつぶし濃度は登録物件数に比例。</p>
+
+  <svg class="heatmap-svg"
+       viewBox="0 0 {{ map_view_w }} {{ map_view_h }}"
+       preserveAspectRatio="xMidYMid meet"
+       role="img" aria-label="47都道府県塗り分け図">
+    {% for pref in prefectures %}
+      <path class="pref"
+            d="{{ pref.svg_d }}"
+            data-pref="{{ pref.prefecture }}"
+            data-count="{{ pref.count }}"
+            data-posts="{{ pref.posts }}"
+            fill="rgba(204, 77, 30, {{ 0.08 + pref.intensity * 0.85 }})"
+            stroke="rgba(0,0,0,0.35)"
+            stroke-width="0.5"
+            stroke-linejoin="round">
+        <title>{{ pref.prefecture }} ── {{ pref.count }} 件の物件 · {{ pref.posts }} 件の投稿</title>
+      </path>
+    {% endfor %}
+  </svg>
+
+  {% if ranking %}
+  <table class="heatmap-rank">
+    <thead>
+      <tr>
+        <th class="num">#</th>
+        <th>都道府県</th>
+        <th class="tabular">物件数</th>
+        <th class="tabular">投稿数</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in ranking %}
+        <tr>
+          <td class="num">{{ loop.index }}</td>
+          <td lang="ja">{{ row.prefecture }}</td>
+          <td class="tabular">{{ row.listings }}</td>
+          <td class="tabular">{{ row.posts }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+{% endblock %}

@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}{{ listing.building_name or '物件' }} ── IO.Fango{% endblock %}
+{% block content %}
+
+<div class="feed-header">
+  <div class="feed-title">
+    <h1 style="font-size: var(--text-lg);">← 物件</h1>
+    <span class="feed-tagline mono">#{{ '%05d' % listing.id }}</span>
+  </div>
+</div>
+
+<section class="listing-detail">
+  <header class="lc-head">
+    <h1 lang="ja">{{ listing.building_name or '無題' }}</h1>
+    {% if listing.title %}<div class="lc-en" lang="ja">{{ listing.title }}</div>{% endif %}
+    {% if listing.address %}<div class="lc-addr" lang="ja">{{ listing.address }}</div>{% endif %}
+    {% if listing.extra.get('rent_yen') %}
+      <div class="lc-price-hero tabular">月額 ¥{{ '{:,}'.format(listing.extra.get('rent_yen')) }}</div>
+    {% else %}
+      <div class="lc-price-hero tabular">{{ listing.price_man | yen_man }}</div>
+    {% endif %}
+  </header>
+
+  {% if images_by_kind and (images_by_kind.raw or images_by_kind.processed or images_by_kind.shuhen) %}
+  <section class="listing-gallery" style="display: grid; gap: var(--space-3); margin: var(--space-4) 0;">
+    {% if images_by_kind.raw %}
+      <div class="gallery-group">
+        <h3 style="font-size: var(--text-sm); margin-bottom: var(--space-2);">写真</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-2);">
+          {% for img in images_by_kind.raw %}
+            <a href="{{ img.url }}" target="_blank" rel="noopener">
+              <img src="{{ img.url }}" alt="{{ img.label or 'listing photo' }}"
+                   loading="lazy"
+                   style="width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: var(--radius-md); background: var(--surface-2);">
+            </a>
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% if images_by_kind.shuhen %}
+      <details class="gallery-group">
+        <summary style="cursor: pointer; font-size: var(--text-sm); margin-bottom: var(--space-2);">
+          周辺 ({{ images_by_kind.shuhen|length }})
+        </summary>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-2);">
+          {% for img in images_by_kind.shuhen %}
+            <figure style="margin: 0;">
+              <img src="{{ img.url }}" alt="{{ img.label or '' }}" loading="lazy"
+                   style="width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: var(--radius-md);">
+              {% if img.label %}
+                <figcaption lang="ja" style="font-size: var(--text-xs); margin-top: 4px; color: var(--muted);">{{ img.label }}</figcaption>
+              {% endif %}
+            </figure>
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
+    {% if images_by_kind.processed %}
+      <details class="gallery-group">
+        <summary style="cursor: pointer; font-size: var(--text-sm); margin-bottom: var(--space-2);">
+          分類画像 ({{ images_by_kind.processed|length }})
+        </summary>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-2);">
+          {% for img in images_by_kind.processed %}
+            <img src="{{ img.url }}" alt="{{ img.label or '' }}" loading="lazy"
+                 title="{{ img.label or '' }}"
+                 style="width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: var(--radius-md);">
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <table class="spec-table">
+    <tbody>
+      {% if listing.layout %}<tr><th>間取り</th><td>{{ listing.layout }}</td></tr>{% endif %}
+      {% if listing.area_sqm %}<tr><th>面積</th><td>{{ listing.area_sqm | sqm }}</td></tr>{% endif %}
+      {% if listing.extra.get('price_per_sqm_man') %}<tr><th>単価</th><td>{{ listing.extra.get('price_per_sqm_man') }} 万円/㎡</td></tr>{% endif %}
+      {% if listing.built_year %}<tr><th>築年</th><td>{{ listing.built_year }}{% if listing.extra.get('built_month') %}.{{ '%02d' % listing.extra.get('built_month') }}{% endif %}</td></tr>{% endif %}
+      {% if listing.floor and listing.total_floors %}<tr><th>階数</th><td>{{ listing.floor }} / {{ listing.total_floors }}F</td></tr>{% endif %}
+      {% if transports %}
+        <tr><th>交通</th><td lang="ja">
+          {% for t in transports %}
+            <div style="margin-bottom: 4px;">
+              {% if t.station %}{{ t.station | station_tag(t.line) }}{% endif %}
+              {% if t.walk_minutes %} · {{ t.walk_minutes | walk_min }}{% endif %}
+            </div>
+          {% endfor %}
+        </td></tr>
+      {% elif listing.station %}<tr><th>最寄駅</th><td lang="ja">{{ listing.station | station_tag(listing.station_line) }}{% if listing.walk_minutes %} · {{ listing.walk_minutes | walk_min }}{% endif %}</td></tr>{% endif %}
+      {% if listing.prefecture %}<tr><th>所在地</th><td lang="ja">{{ listing.prefecture }}{% if listing.city %} · {{ listing.city }}{% endif %}{% if listing.ward %} · {{ listing.ward }}{% endif %}</td></tr>{% endif %}
+      {% if listing.reins_id %}<tr><th>REINS ID</th><td class="mono">{{ listing.reins_id }}</td></tr>{% endif %}
+      {% if listing.url %}<tr><th>出典</th><td><a href="{{ listing.url }}" target="_blank" rel="noopener noreferrer">{{ listing.url }}</a></td></tr>{% endif %}
+    </tbody>
+  </table>
+
+  {% if price_history and price_history|length > 1 %}
+  <div class="price-history-card">
+    <h3>価格履歴</h3>
+    <svg class="price-history-svg" viewBox="0 0 600 120" preserveAspectRatio="none">
+      <path class="area" d="{{ sparkline.area }}"/>
+      <path class="line" d="{{ sparkline.line }}"/>
+      {% for pt in sparkline.points %}
+        <circle class="dot" cx="{{ pt.x }}" cy="{{ pt.y }}" r="3"/>
+      {% endfor %}
+    </svg>
+    <div class="price-history-delta {% if sparkline.delta_pct < 0 %}down{% elif sparkline.delta_pct > 0 %}up{% endif %}">
+      {{ '%+.1f' % sparkline.delta_pct }}% · {{ price_history|length }} 件の記録
+    </div>
+  </div>
+  {% endif %}
+
+  {% if building_stats %}
+  <div class="price-history-card">
+    <h3>建物統計</h3>
+    <table class="spec-table" style="margin: 0;">
+      <tbody>
+        <tr><th>登録物件数</th><td class="tabular">{{ building_stats.listing_count }}</td></tr>
+        {% if building_stats.avg_price_man %}<tr><th>平均価格</th><td class="tabular">{{ building_stats.avg_price_man | int | yen_man }}</td></tr>{% endif %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if refs %}
+  <section class="cross-refs">
+    <h3>{{ refs|length }} 件の投稿で引用</h3>
+    {% for row in refs %}
+      {% set post = row.post %}
+      {% set post_forum = row.forum %}
+      {% include "partials/post.html" %}
+    {% endfor %}
+  </section>
+  {% endif %}
+</section>
+
+{% endblock %}

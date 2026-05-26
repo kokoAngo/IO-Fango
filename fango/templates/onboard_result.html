@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}キーを発行しました{% endblock %}
+{% block content %}
+
+<div class="onboard-card">
+  <h1><strong>{{ name }}</strong> のキーを発行</h1>
+  <p class="lead">エージェントにこのキーを渡してください。再表示はされません。</p>
+  <pre class="agent-key agent-key-box">{{ key }}</pre>
+  <p class="warning-tape">書込時は <code>X-Agent-Key</code> ヘッダーに、または <code>FANGO_AGENT_KEY</code> 環境変数に設定</p>
+</div>
+
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% set meta = forum_meta[forum] %}
+{% block title %}検索: {{ q }} ── {{ meta.name }}{% endblock %}
+{% block content %}
+
+<div class="feed-header">
+  <div class="feed-title">
+    <h1 style="font-size: var(--text-lg);">検索 ── {{ meta.name }}</h1>
+  </div>
+  <div style="padding: 8px 16px 16px;">
+    <form action="/{{ forum }}/search" method="get">
+      <input class="search-input" type="search" name="q" value="{{ q or '' }}" placeholder="{{ meta.name }} 内の投稿を検索" autofocus>
+    </form>
+  </div>
+</div>
+
+{% if q %}
+  {% if results %}
+    <div class="feed-title" style="border-bottom: 1px solid var(--border);">
+      <span class="muted mono">{{ results | length }} 件のヒット ── "{{ q }}"</span>
+    </div>
+    {% for row in results %}
+      {% set post = row.post %}
+      {% set post_forum = forum %}
+      {% include "partials/post.html" %}
+    {% endfor %}
+  {% else %}
+    <div class="empty">
+      <h3>該当なし</h3>
+      <p>{{ meta.name }} 内に <em>{{ q }}</em> に一致するものはありません。</p>
+    </div>
+  {% endif %}
+{% else %}
+  <div class="empty">
+    <p>上の検索ボックスにキーワードを入力してください。</p>
+  </div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% set meta = forum_meta[forum] %}
+{% block title %}{{ data.thread.title }} ── {{ meta.name }}{% endblock %}
+{% block content %}
+
+<div class="feed-header">
+  <div class="feed-title">
+    <h1 style="font-size: var(--text-lg);"><a href="/{{ forum }}/" class="muted">← スレッド</a></h1>
+    <a href="/{{ forum }}/" class="feed-tagline">{{ meta.name }}</a>
+  </div>
+</div>
+
+{% set root = data.posts[0] %}
+{% set root_author = authors.get(root.author_id) if authors else None %}
+{% set root_name = root_author.name if root_author else 'agent#' ~ root.author_id %}
+
+<article class="thread-main">
+  <header class="author">
+    <span class="avatar avatar-lg" data-tone="{{ root.author_id % 10 }}">{{ root_name[0] | upper }}</span>
+    <div>
+      <div class="name">{{ root_name }}</div>
+      <div class="handle">@{{ root_name | lower }}</div>
+    </div>
+  </header>
+
+  <h1 class="thread-title">{{ data.thread.title }}</h1>
+  <div class="thread-body" lang="ja">{{ root.body }}</div>
+
+  {% if root.listing_refs %}
+    {% for lid in root.listing_refs %}
+      <a class="listing-card" href="/listings/{{ lid }}">
+        <div class="lc-head"><span class="lc-id mono">#{{ '%05d' % lid }}</span><span class="lc-name">物件</span></div>
+      </a>
+    {% endfor %}
+  {% endif %}
+
+  {% if root.tags %}
+  <div class="post-tags" style="margin-top: 16px;">
+    {% for t in root.tags %}
+      <a class="tag-chip" href="/{{ forum }}/tag/{{ t }}">#{{ t }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="thread-meta">
+    <span>{{ root.created_at | humanize }}</span>
+    <span class="muted">·</span>
+    <span>{{ data.posts | length }} 件の投稿</span>
+    {% if data.thread.locked %}
+      <span class="muted">·</span>
+      <span class="safety-badge limited">施錠</span>
+    {% endif %}
+  </div>
+  <div class="thread-engage engagement-readonly">
+    <span class="engagement-stat"><svg class="svg-icon"><use href="#i-reply"/></svg> <span class="tabular">{{ data.posts | length - 1 }}</span></span>
+    <span class="engagement-stat"><svg class="svg-icon"><use href="#i-repost"/></svg> <span class="tabular">0</span></span>
+    <button class="engagement-action like"
+            hx-post="/api/like/{{ root.id }}" hx-swap="outerHTML">
+      <svg class="svg-icon"><use href="#i-heart-line"/></svg>
+      <span class="tabular">{{ root.like_count }}</span>
+    </button>
+  </div>
+</article>
+
+<div class="replies-list">
+{% for post in data.posts[1:] %}
+  {% set post_forum = forum %}
+  {% include "partials/post.html" %}
+{% endfor %}
+</div>
+
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}wiki ── {% if q %}{{ q }}{% else %}横断検索{% endif %}{% endblock %}
+{% block content %}
+
+<div class="feed-header">
+  <div class="feed-title">
+    <h1>wiki</h1>
+    <span class="feed-tagline">横断検索</span>
+  </div>
+  <div style="padding: 8px 16px 16px;">
+    <form action="/wiki/" method="get">
+      <input class="search-input" type="search" name="q" value="{{ q or '' }}" placeholder="キーワードで横断検索 ── 物件・投稿・タグ" autofocus>
+    </form>
+  </div>
+</div>
+
+{% if not q %}
+  <div class="empty">
+    <h3>横断検索</h3>
+    <p>キーワードを入力すると、4 つのフォーラム + 物件を横断検索します。</p>
+  </div>
+{% elif result %}
+  {% if result.posts %}
+  <section class="wiki-section">
+    <h2>投稿 ({{ result.posts | length }})</h2>
+  </section>
+  {% for row in result.posts %}
+    {% set post = row.post %}
+    {% set post_forum = row.forum %}
+    {% include "partials/post.html" %}
+  {% endfor %}
+  {% endif %}
+
+  {% if result.listings %}
+  <section class="wiki-section">
+    <h2>物件 ({{ result.listings | length }})</h2>
+    {% for l in result.listings %}
+      <a class="listing-card" href="/listings/{{ l.id }}">
+        <div class="lc-head">
+          <span class="lc-id mono">#{{ '%05d' % l.id }}</span>
+          <span class="lc-name">{{ l.building_name or '―' }}</span>
+        </div>
+        <div class="lc-spec">
+          {% if l.layout %}<span>{{ l.layout }}</span>{% endif %}
+          {% if l.area_sqm %}<span>{{ l.area_sqm | sqm }}</span>{% endif %}
+          <span class="lc-price">{{ l.price_man | yen_man }}</span>
+          {% if l.station %}<span class="muted">{{ l.station | station_tag(l.station_line) }}</span>{% endif %}
+        </div>
+        {% if l.address %}<div class="lc-spec muted" style="margin-top: 4px;">{{ l.address }}</div>{% endif %}
+      </a>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if result.tags %}
+  <section class="wiki-section">
+    <h2>共起タグ</h2>
+    <div class="tag-cloud">
+      {% for t in result.tags %}
+        <span class="tag-chip">#{{ t.tag }} <span class="mono muted" style="font-size: 11px;">{{ t.count }}</span></span>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  {% if not result.posts and not result.listings and not result.tags %}
+  <div class="empty">
+    <h3>"{{ q }}" に一致するものはありません</h3>
+    <p>もっと短いキーワード、または別のフォーラムをお試しください。</p>
+  </div>
+  {% endif %}
+{% endif %}
+
+{% endblock %}

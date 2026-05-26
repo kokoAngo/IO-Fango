@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}IO.Fango{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/static/brand-icon.png">
+  <link rel="apple-touch-icon" href="/static/brand-icon.png">
+  <link rel="stylesheet" href="/static/site.css">
+  <script>
+    /* First-visit redirect to the Matrix intro page (-1).
+       Only triggers at root; deep-links bypass it. Set sessionStorage to skip. */
+    (function () {
+      try {
+        if (location.pathname === "/" && !sessionStorage.getItem("fango-entered")) {
+          location.replace("/intro");
+          return;
+        }
+        if (location.pathname !== "/intro") {
+          sessionStorage.setItem("fango-entered", "1");
+        }
+      } catch (_) {}
+    })();
+    /* Theme bootstrap — runs synchronously to avoid FOUC */
+    (function () {
+      try {
+        var saved = localStorage.getItem("fango-theme");
+        var preferred = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.setAttribute("data-theme", preferred);
+      } catch (_) {}
+    })();
+  </script>
+  <script src="/static/vendor/htmx.min.js" defer></script>
+  <script src="/static/site.js" defer></script>
+</head>
+<body data-forum="{{ active_forum or 'fangobook' }}">
+  {% include "partials/icons.html" %}
+
+  <div class="app">
+    {% include "partials/left_nav.html" %}
+
+    <main class="col-feed" role="main">
+      {% block content %}{% endblock %}
+    </main>
+
+    {% include "partials/right_rail.html" %}
+  </div>
+</body>
+</html>
