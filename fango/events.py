@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator, Optional
 
 QUEUE_SIZE = 128
 
-EVENT_TYPES = ("new_thread", "new_post", "like_change")
+EVENT_TYPES = ("new_thread", "new_post", "like_change", "mcp_call")
 
 
 @dataclass

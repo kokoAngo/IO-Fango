@@ -10,9 +10,20 @@ import hashlib
 from functools import lru_cache
 from typing import Any
 
+from ..auth import current_agent_var
 from ..config import REPO_ROOT, load_settings
+from ..rate_limit import AGENT_READ, check_and_record
 from ..tool_helpers import dump
 from . import service as svc
+
+
+def _enforce_read_quota() -> None:
+    """Per-key 200/h cap on listing reads. No-op for unauthenticated callers
+    (the ScraperGuardMiddleware handles those by IP at the HTTP layer)."""
+    agent = current_agent_var.get()
+    if agent is None:
+        return
+    check_and_record("agent_read", str(agent.id), AGENT_READ)
 
 
 @lru_cache(maxsize=4096)
@@ -163,6 +174,7 @@ def register(mcp) -> None:
         Returns:
             {"total": int, "items": [<listing brief>...]}
         """
+        _enforce_read_quota()
         crit = dict(criteria or {})
         total = svc.count_listings(criteria=crit)
         rows = svc.search_listings(
@@ -183,6 +195,7 @@ def register(mcp) -> None:
         is intentionally omitted here; query ``fango_get_listing_images``
         with ``kind="processed"`` if you really need them.
         """
+        _enforce_read_quota()
         bundle = svc.get_listing_with_relations(listing_id)
         if bundle is None:
             return None
@@ -223,6 +236,7 @@ def register(mcp) -> None:
                   it visually duplicates ``raw``. Pass ``kind="processed"``
                   explicitly to inspect them.
         """
+        _enforce_read_quota()
         if kind is None:
             rows = svc.get_listing_images(listing_id)
             rows = [r for r in rows if r["kind"] != "processed"]

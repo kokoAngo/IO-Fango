@@ -28,7 +28,10 @@ log = logging.getLogger(__name__)
 
 
 def _record_mcp_call(tool_name: str) -> None:
-    """Log one row per tool invocation. Never raises — telemetry is best-effort."""
+    """Log one row per tool invocation, then publish a live-feed event.
+
+    Both steps are best-effort — telemetry should never fail a tool call.
+    """
     try:
         conn = fango_db.connect()
         try:
@@ -40,6 +43,11 @@ def _record_mcp_call(tool_name: str) -> None:
             conn.close()
     except Exception as exc:  # pragma: no cover
         log.debug("mcp call telemetry write failed: %s", exc)
+    try:
+        from .events import Event, publish
+        publish(Event(type="mcp_call", payload={"tool": tool_name}))
+    except Exception as exc:  # pragma: no cover
+        log.debug("mcp call event publish failed: %s", exc)
 
 
 def _instrument(mcp: FastMCP) -> None:

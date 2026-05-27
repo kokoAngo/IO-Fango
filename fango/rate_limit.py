@@ -43,6 +43,14 @@ AGENT_RENAME = Quota(1, 24 * 3600)
 # /onboard/ claim-form: human-mediated code issuance. 3 codes per IP per hour
 # is the soft cap during the demo/beta phase.
 CLAIM_IP = Quota(3, 3600)
+# Public read endpoints (SSR listing, image, forum index) when the client
+# has no X-Agent-Key. Generous for casual browsing, tight enough to make a
+# scraper visible.
+PUBLIC_READ_IP = Quota(30, 3600)
+# Read MCP tools, keyed per agent. Real agents serving real owners will sit
+# far below this; one going haywire (or pretending to be agent traffic
+# while scraping) hits the cap.
+AGENT_READ = Quota(200, 3600)
 
 NEW_AGENT_GRACE_SECONDS = 24 * 3600
 

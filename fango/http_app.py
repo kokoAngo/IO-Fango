@@ -188,6 +188,100 @@ class McpHostAllowlistMiddleware:
         await self.app(scope, receive, send)
 
 
+_PUBLIC_READ_PREFIXES = ("/listings/", "/baibai/", "/chintai/", "/chat/", "/dojo/", "/wiki/")
+# Substrings that flag obvious non-browser fetchers. We match
+# case-insensitively against the User-Agent header. Anything containing
+# 'Mozilla' (i.e. real browsers + most polite bots that fake one) gets a
+# pass — the next line of defence is IP rate-limiting.
+_BOT_UA_NEEDLES = (
+    "curl/", "python-requests", "python-urllib", "wget/", "scrapy",
+    "go-http-client", "httpx/", "okhttp", "java/", "ruby", "axios",
+    "guzzlehttp", "node-fetch",
+)
+
+
+class ScraperGuardMiddleware:
+    """Front-line defence on the public read surface.
+
+    * Blocks obvious scraping User-Agents (curl / wget / python-requests /
+      etc.) outright with 403.
+    * Rate-limits authenticated-less callers per IP for the SSR pages and
+      image endpoint that would otherwise let a bot enumerate the catalog.
+      Clients carrying a valid ``X-Agent-Key`` skip the IP cap and instead
+      hit the per-key cap inside the MCP layer.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    @staticmethod
+    def _is_protected_path(path: str) -> bool:
+        return any(path.startswith(p) for p in _PUBLIC_READ_PREFIXES)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if not self._is_protected_path(path):
+            await self.app(scope, receive, send)
+            return
+
+        ua = b""
+        agent_key = b""
+        client_ip = "0.0.0.0"
+        for k, v in scope.get("headers", ()):
+            if k == b"user-agent":
+                ua = v
+            elif k == b"x-agent-key":
+                agent_key = v
+            elif k == b"x-forwarded-for":
+                client_ip = v.decode("latin-1", "ignore").split(",")[0].strip()
+        if client_ip == "0.0.0.0" and scope.get("client"):
+            client_ip = scope["client"][0]
+
+        # Bot UA gate.
+        ua_lc = ua.decode("latin-1", "ignore").lower()
+        for needle in _BOT_UA_NEEDLES:
+            if needle in ua_lc:
+                await self._respond_403(send, b"forbidden: identify as a browser, or use the MCP tools with an agent key")
+                return
+
+        # IP rate-limit (only when no key — keyed callers go through the
+        # MCP-side per-key limiter instead).
+        if not agent_key:
+            from .rate_limit import PUBLIC_READ_IP, RateLimitError, check_and_record
+            try:
+                check_and_record("public_read_ip", client_ip, PUBLIC_READ_IP)
+            except RateLimitError as exc:
+                await self._respond_429(send, exc.retry_after_seconds)
+                return
+
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _respond_403(send, body: bytes) -> None:
+        await send({
+            "type": "http.response.start",
+            "status": 403,
+            "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+    @staticmethod
+    async def _respond_429(send, retry_after: int) -> None:
+        body = f"rate limit exceeded; retry in {retry_after}s".encode()
+        await send({
+            "type": "http.response.start",
+            "status": 429,
+            "headers": [
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"retry-after", str(retry_after).encode()),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+
 class TimingMiddleware:
     """Add x-server-ms header — diagnostic."""
 
@@ -237,6 +331,7 @@ def _build_app() -> FastAPI:
     app = FastAPI(title="IO.Fango", lifespan=lifespan)
     app.add_middleware(AgentKeyMiddleware)
     app.add_middleware(McpHostAllowlistMiddleware)
+    app.add_middleware(ScraperGuardMiddleware)
     app.add_middleware(TimingMiddleware)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -312,33 +407,34 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/listings/{listing_id}", response_class=HTMLResponse)
     async def listing_detail(listing_id: int, request: Request):
+        """Public SSR — intentionally limited to a marketing-grade preview.
+
+        Deep fields (REINS id, source URL, agent company, raw_json, full
+        price history, full gallery, building stats, cross-referencing
+        posts) are *omitted on purpose* so a bot fetching the HTML can't
+        rebuild the database. Agents with a key get the full payload via
+        ``fango_get_listing(listing_id)`` over MCP.
+        """
         bundle = ls.get_listing_with_relations(listing_id)
         if bundle is None:
             raise HTTPException(status_code=404, detail="listing not found")
         listing = bundle["listing"]
-        history = bundle["price_history"]
-        transports = bundle["transports"]
-        # Group images by kind for the template.
-        images_by_kind: dict[str, list[dict]] = {"raw": [], "processed": [], "shuhen": []}
+        # Single thumbnail only — the first raw image. No gallery, no
+        # processed crops, no shuhen tour.
+        thumbnail = None
         for img in bundle["images"]:
-            kind = img.get("kind")
-            if kind in images_by_kind:
+            if img.get("kind") == "raw":
                 filename = (img.get("rel_path") or "").rsplit("/", 1)[-1]
-                images_by_kind[kind].append({
-                    "url": f"/listings/img/{listing_id}/{kind}/{filename}",
-                    "label": img.get("label"),
-                    "sort_order": img.get("sort_order"),
-                })
-        refs = _posts_referencing_listing(listing_id)
-        building_stats = _building_stats(listing.building_name)
-        sparkline = _sparkline(history)
+                thumbnail = f"/listings/img/{listing_id}/raw/{filename}"
+                break
+        # Transports trimmed to first 2 (enough for "do I want to look closer?").
+        transports = bundle["transports"][:2]
         ctx = shared_ctx(request)
         ctx.update({
-            "listing": listing, "price_history": history,
-            "refs": refs, "building_stats": building_stats,
-            "sparkline": sparkline,
+            "listing": listing,
+            "thumbnail": thumbnail,
             "transports": transports,
-            "images_by_kind": images_by_kind,
+            "is_preview": True,           # template branches on this
         })
         return templates.TemplateResponse(request, "listing.html", ctx)
 

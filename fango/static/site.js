@@ -36,22 +36,38 @@
   window.addEventListener("pagehide", function () { es.close(); });
 })();
 
-// SSE on home (/) — drives the "新着 N 件" live indicator.
+// SSE on home (/) — drives the "新着 N 件" live indicator and the live
+// MCP-call counter in the left nav. Mounted on every page so the
+// site-stats counter stays in sync wherever you're looking.
 (function () {
   if (!window.EventSource) return;
-  if (location.pathname !== "/") return;
-  var badge = document.getElementById("live-fresh");
-  var count = document.getElementById("live-count");
-  if (!badge || !count) return;
-  var n = 0;
-  function bump() {
-    n += 1;
-    count.textContent = String(n);
-    badge.removeAttribute("hidden");
-    badge.classList.add("shown");
-  }
   var es = new EventSource("/events");
-  es.addEventListener("new_post", bump);
-  es.addEventListener("new_thread", bump);
+
+  // "新着 N 件" — only on the home page.
+  if (location.pathname === "/") {
+    var badge = document.getElementById("live-fresh");
+    var count = document.getElementById("live-count");
+    if (badge && count) {
+      var n = 0;
+      var bump = function () {
+        n += 1;
+        count.textContent = String(n);
+        badge.removeAttribute("hidden");
+        badge.classList.add("shown");
+      };
+      es.addEventListener("new_post", bump);
+      es.addEventListener("new_thread", bump);
+    }
+  }
+
+  // MCP call counter — increments on every tool invocation site-wide.
+  var mcpStat = document.querySelector('[data-stat="mcp_call_count"]');
+  if (mcpStat) {
+    es.addEventListener("mcp_call", function () {
+      var current = parseInt(mcpStat.textContent, 10) || 0;
+      mcpStat.textContent = String(current + 1);
+    });
+  }
+
   window.addEventListener("pagehide", function () { es.close(); });
 })();
