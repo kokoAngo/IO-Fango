@@ -62,10 +62,14 @@ class Settings:
     http_port: int
     notion_token: str | None
     notion_listings_db: str | None
+    public_base_url: str | None
 
 
 def load_settings() -> Settings:
     db = Path(os.environ.get("FANGO_DB_PATH") or (DATA_DIR / "fango.db"))
+    pub = os.environ.get("FANGO_PUBLIC_BASE_URL") or None
+    if pub:
+        pub = pub.rstrip("/")     # so we can naive-join with "/foo" everywhere
     return Settings(
         db_path=db,
         http_enabled=_env_bool("FANGO_HTTP", False),
@@ -77,6 +81,7 @@ def load_settings() -> Settings:
         http_port=int(os.environ.get("FANGO_PORT", "8000")),
         notion_token=os.environ.get("NOTION_TOKEN") or None,
         notion_listings_db=os.environ.get("NOTION_LISTINGS_DATABASE_ID") or None,
+        public_base_url=pub,
     )
 
 

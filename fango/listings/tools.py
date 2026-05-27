@@ -6,10 +6,94 @@ listing recommendations) live in :mod:`fango.listings.saved_search`.
 """
 from __future__ import annotations
 
+import hashlib
+from functools import lru_cache
 from typing import Any
 
+from ..config import REPO_ROOT, load_settings
 from ..tool_helpers import dump
 from . import service as svc
+
+
+@lru_cache(maxsize=4096)
+def _content_hash(rel_path: str) -> str | None:
+    """SHA-256 of an image file's bytes."""
+    try:
+        return hashlib.sha256((REPO_ROOT / rel_path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+# Hamming distance ≤ this is considered "same photo" (different framing /
+# angle of the same scene typically lands ≤ 8 on a 64-bit dHash).
+_PHASH_THRESHOLD = 8
+
+
+@lru_cache(maxsize=4096)
+def _phash(rel_path: str) -> int | None:
+    """dHash (difference hash) of an image — 64-bit perceptual fingerprint.
+
+    Images that look the same to a human land at Hamming distance ≤ 8 from
+    each other; unrelated photos sit at 25+. Resilient to recompression,
+    minor crops, brightness shifts.
+    """
+    try:
+        from PIL import Image
+        with Image.open(REPO_ROOT / rel_path) as im:
+            small = im.convert("L").resize((9, 8), Image.LANCZOS)
+            pixels = list(small.getdata())
+    except (OSError, ValueError, ImportError):
+        return None
+    bits = 0
+    for row in range(8):
+        base = row * 9
+        for col in range(8):
+            bits = (bits << 1) | (1 if pixels[base + col] > pixels[base + col + 1] else 0)
+    return bits
+
+
+def _hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def _dedup_by_content(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop images that look identical (bytes OR perceptual).
+
+    Two passes:
+    1. byte-level (SHA-256) — fast, catches exact dupes (e.g. the same
+       photo re-uploaded under multiple filenames).
+    2. perceptual (dHash + Hamming) — catches the same room shot from a
+       slightly different angle / recompressed thumbnail / minor crop.
+
+    Stable: preserves the first occurrence in input order, so callers can
+    control priority by ordering (raw first, then shuhen).
+    """
+    # Pass 1 — byte identical
+    seen_bytes: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        h = _content_hash(r["rel_path"])
+        if h is None:
+            out.append(r)
+            continue
+        if h in seen_bytes:
+            continue
+        seen_bytes.add(h)
+        out.append(r)
+
+    # Pass 2 — perceptual
+    kept_phashes: list[int] = []
+    final: list[dict[str, Any]] = []
+    for r in out:
+        ph = _phash(r["rel_path"])
+        if ph is None:
+            final.append(r)
+            continue
+        if any(_hamming(ph, prev) <= _PHASH_THRESHOLD for prev in kept_phashes):
+            continue
+        kept_phashes.append(ph)
+        final.append(r)
+    return final
 
 
 def _listing_brief(listing, conn=None) -> dict[str, Any]:
@@ -43,11 +127,15 @@ def _listing_brief(listing, conn=None) -> dict[str, Any]:
 def _img_url(listing_id: int, kind: str, rel_path: str) -> str:
     """Build the URL served by :func:`fango.http_app.serve_listing_image`.
 
-    ``rel_path`` is a project-root-relative path; the last segment is the
-    filename that the endpoint validates and returns.
+    Returns an absolute URL when ``FANGO_PUBLIC_BASE_URL`` is configured
+    (recommended for production so agents can hand the URL straight to
+    the owner without having to know the server host); falls back to a
+    project-relative path so dev / loopback setups still work.
     """
     filename = rel_path.rsplit("/", 1)[-1]
-    return f"/listings/img/{listing_id}/{kind}/{filename}"
+    path = f"/listings/img/{listing_id}/{kind}/{filename}"
+    base = load_settings().public_base_url
+    return f"{base}{path}" if base else path
 
 
 def register(mcp) -> None:
@@ -87,20 +175,32 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def fango_get_listing(listing_id: int) -> dict[str, Any] | None:
-        """Fetch a listing's full detail (incl. transports, images, price history)."""
+        """Fetch a listing's full detail (transports, images, price history).
+
+        Images are filtered to the user-facing kinds — ``raw`` (interior /
+        exterior photos) and ``shuhen`` (neighbourhood / POI). The
+        ``processed`` kind (ML classifier crops; visually duplicates ``raw``)
+        is intentionally omitted here; query ``fango_get_listing_images``
+        with ``kind="processed"`` if you really need them.
+        """
         bundle = svc.get_listing_with_relations(listing_id)
         if bundle is None:
             return None
         listing = bundle["listing"]
-        # Hydrate image URLs.
-        images_out = []
-        for img in bundle["images"]:
-            images_out.append({
+        # Drop the ML-internal 'processed' variants AND any byte-identical
+        # duplicates (REINS sometimes ships the same exterior photo under
+        # multiple filenames; owners don't want to scroll through dupes).
+        visible = [img for img in bundle["images"] if img["kind"] != "processed"]
+        deduped = _dedup_by_content(visible)
+        images_out = [
+            {
                 "kind": img["kind"],
                 "label": img.get("label"),
                 "sort_order": img["sort_order"],
                 "url": _img_url(listing.id, img["kind"], img["rel_path"]),
-            })
+            }
+            for img in deduped
+        ]
         return {
             "listing": dump(listing),
             "transports": bundle["transports"],
@@ -118,8 +218,19 @@ def register(mcp) -> None:
         Args:
             listing_id: Target listing id.
             kind: Optional filter — 'raw' | 'processed' | 'shuhen'.
+                  If omitted, returns user-facing photos only (``raw`` +
+                  ``shuhen``); ``processed`` is excluded by default since
+                  it visually duplicates ``raw``. Pass ``kind="processed"``
+                  explicitly to inspect them.
         """
-        rows = svc.get_listing_images(listing_id, kind=kind)
+        if kind is None:
+            rows = svc.get_listing_images(listing_id)
+            rows = [r for r in rows if r["kind"] != "processed"]
+        else:
+            rows = svc.get_listing_images(listing_id, kind=kind)
+        # Same byte-level dedup as fango_get_listing — drop disk-identical
+        # duplicates so owners don't see the same photo twice.
+        rows = _dedup_by_content(rows)
         return [
             {
                 "kind": r["kind"],

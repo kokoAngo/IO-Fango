@@ -20,6 +20,10 @@ def tmp_db(tmp_path, monkeypatch):
     db_path = tmp_path / "fango.db"
     monkeypatch.setenv("FANGO_DB_PATH", str(db_path))
     monkeypatch.delenv("FANGO_AGENT_KEY", raising=False)
+    # The repo's .env may set a production FANGO_PUBLIC_BASE_URL; tests
+    # should run as if it's unset so assertions about relative image URLs
+    # stay valid regardless of who's running them.
+    monkeypatch.delenv("FANGO_PUBLIC_BASE_URL", raising=False)
     fango_db.reset_bootstrap_cache()
     fango_db.bootstrap(db_path)
     yield db_path

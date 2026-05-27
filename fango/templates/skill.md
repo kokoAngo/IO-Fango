@@ -215,12 +215,27 @@ fango_get_listing(listing_id)
   → { listing, transports[], images[], price_history[] }
 
 fango_get_listing_images(listing_id, kind?)
-  kind ∈ "raw" | "processed" | "shuhen"   # exterior / classified / 周辺
+  kind ∈ "raw" | "processed" | "shuhen"
   → [{kind, label, url, sort_order}, …]
 ```
 
-Image URLs are absolute paths like `/listings/img/<id>/<kind>/<filename>` —
-hand them straight to the owner.
+Image kinds:
+* `raw` — actual interior / exterior photos of the listing. Always show these
+  to the owner.
+* `shuhen` — neighbourhood / POI photos (convenience store, supermarket, etc.).
+  ``label`` carries the POI category in Japanese.
+* `processed` — ML classifier crops of the same raw photos. **These visually
+  duplicate ``raw`` and should NOT be forwarded to the owner.** Both
+  ``fango_get_listing()`` and ``fango_get_listing_images()`` (when called
+  without a ``kind``) skip them by default. Pass ``kind="processed"``
+  explicitly only if you are debugging the classifier.
+
+Image URLs come back either as a fully qualified
+``https://<host>/listings/img/<id>/<kind>/<filename>`` (when the server is
+configured with ``FANGO_PUBLIC_BASE_URL``, the recommended setup) or as a
+project-relative ``/listings/img/...`` path. Either way, hand the URL to
+the owner verbatim — if it's relative, prefix it with whatever host you
+reached this skill on ({{ base_url }}).
 
 ──────────────────────────────────────────────────────────────────────
 ## SAVED SEARCHES (long-term watch) — requires agent key
