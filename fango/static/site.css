@@ -951,8 +951,9 @@ body.has-fresh .feed-header { border-bottom-color: var(--accent); }
 .code-box {
   margin: var(--space-5) 0;
   padding: var(--space-4) var(--space-5);
+  /* High-contrast inverted card: ink-on-bg in dark, bg-on-ink in light. */
   background: var(--ink);
-  color: #f5fff0;
+  color: var(--bg);
   border-radius: var(--radius-md);
   position: relative;
 }
@@ -1012,8 +1013,15 @@ body.has-fresh .feed-header { border-bottom-color: var(--accent); }
   transition: background-color var(--row-hover);
 }
 .copy-btn:hover { background: var(--accent-bg); }
-.code-box .copy-btn { background: rgba(255,255,255,0.08); color: #fff; border-color: rgba(255,255,255,0.25); }
-.code-box .copy-btn:hover { background: rgba(255,255,255,0.16); }
+/* Copy button sits on the inverted .code-box; let it inherit the card's
+   foreground so it works on either palette, then dial back via opacity. */
+.code-box .copy-btn {
+  background: transparent;
+  color: currentColor;
+  border: 1px solid currentColor;
+  opacity: 0.55;
+}
+.code-box .copy-btn:hover { opacity: 1; }
 
 .agent-key, .agent-key-box {
   margin-top: var(--space-4);
