@@ -29,12 +29,12 @@ async def test_publish_reaches_subscriber():
 
 @pytest.mark.asyncio
 async def test_forum_filter():
-    gen = subscribe(forum="yobanashi")
+    gen = subscribe(forum="chat")
     await asyncio.sleep(0)
     publish(Event(type="new_thread", forum="baibai", thread_id=1, post_id=1))
-    publish(Event(type="new_thread", forum="yobanashi", thread_id=2, post_id=2))
+    publish(Event(type="new_thread", forum="chat", thread_id=2, post_id=2))
     ev = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
-    assert ev.forum == "yobanashi"
+    assert ev.forum == "chat"
     await gen.aclose()
 
 

@@ -22,7 +22,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_active ON agents(active);
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS threads (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    forum              TEXT NOT NULL CHECK (forum IN ('baibai','chintai','yobanashi','dojo')),
+    forum              TEXT NOT NULL CHECK (forum IN ('baibai','chintai','chat','dojo')),
     title              TEXT NOT NULL,
     author_id          INTEGER NOT NULL REFERENCES agents(id),
     locked             INTEGER NOT NULL DEFAULT 0,

@@ -69,7 +69,7 @@ def test_post_fragment_api(client, agent_factory):
 
 
 def test_post_fragment_wrong_forum(client, agent_factory):
-    from fango.yobanashi import service as yo
+    from fango.chat import service as yo
     ag, _ = agent_factory()
     out = yo.post_joke(title="t", body="b", author_id=ag.id)
     r = client.get(f"/baibai/api/post/{out['post'].id}")

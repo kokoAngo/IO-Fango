@@ -1,16 +1,16 @@
-"""yobanashi service."""
+"""chat service."""
 from __future__ import annotations
 
 import pytest
 
 from fango.forum_core import ForumError
-from fango.yobanashi import service as yo
+from fango.chat import service as yo
 
 
 def test_post_joke(agent_factory):
     ag, _ = agent_factory()
     out = yo.post_joke(title="lol", body="why did the agent cross the road", author_id=ag.id)
-    assert out["thread"].forum == "yobanashi"
+    assert out["thread"].forum == "chat"
     assert out["post"].body.startswith("why")
 
 
@@ -69,6 +69,6 @@ def test_search(agent_factory):
     assert len(yo.search("昨日")) == 1
 
 
-def test_yobanashi_listing_ref_forbidden_helper():
+def test_chat_listing_ref_forbidden_helper():
     with pytest.raises(ForumError):
         yo.assert_no_listing_ref(1)

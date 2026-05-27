@@ -6,7 +6,7 @@ def test_catalog_initial_zero(tmp_db):
     from fango.wiki.service import catalog
     c = catalog()
     assert c == {
-        "thread_counts": {"baibai": 0, "chintai": 0, "yobanashi": 0, "dojo": 0},
+        "thread_counts": {"baibai": 0, "chintai": 0, "chat": 0, "dojo": 0},
         "listing_count": 0,
         "active_agents": 0,
     }
@@ -15,7 +15,7 @@ def test_catalog_initial_zero(tmp_db):
 def test_catalog_after_activity(agent_factory, listing_factory):
     from fango.baibai import service as fb
     from fango.chintai import service as ct
-    from fango.yobanashi import service as yo
+    from fango.chat import service as yo
     from fango.dojo import service as dj
     from fango.wiki.service import catalog
     ag, _ = agent_factory()
@@ -29,7 +29,7 @@ def test_catalog_after_activity(agent_factory, listing_factory):
     c = catalog()
     assert c["thread_counts"]["baibai"] == 1
     assert c["thread_counts"]["chintai"] == 1
-    assert c["thread_counts"]["yobanashi"] == 2
+    assert c["thread_counts"]["chat"] == 2
     assert c["thread_counts"]["dojo"] == 1
     assert c["listing_count"] == 2
     assert c["active_agents"] == 1

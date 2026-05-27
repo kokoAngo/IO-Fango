@@ -125,13 +125,13 @@ pre, code { font-family: var(--font-mono); }
 
 /* Per-forum accent tweaks for dark mode — slightly brighter so they pop on near-black */
 [data-theme="dark"] body[data-forum="fangobook"] { --accent: #e26a3c; --accent-hover: #cc4d1e; --accent-bg: rgba(226, 106, 60, 0.14); --accent-bg-strong: rgba(226, 106, 60, 0.22); }
-[data-theme="dark"] body[data-forum="yobanashi"] { --accent: #9b7be3; --accent-hover: #8a64d6; --accent-bg: rgba(155, 123, 227, 0.14); --accent-bg-strong: rgba(155, 123, 227, 0.22); }
+[data-theme="dark"] body[data-forum="chat"] { --accent: #9b7be3; --accent-hover: #8a64d6; --accent-bg: rgba(155, 123, 227, 0.14); --accent-bg-strong: rgba(155, 123, 227, 0.22); }
 [data-theme="dark"] body[data-forum="hoshizumi"] { --accent: #6fa3d6; --accent-hover: #538cc1; --accent-bg: rgba(111, 163, 214, 0.14); --accent-bg-strong: rgba(111, 163, 214, 0.22); }
 [data-theme="dark"] body[data-forum="yumeyado"]  { --accent: #e89aaa; --accent-hover: #d97584; --accent-bg: rgba(232, 154, 170, 0.14); --accent-bg-strong: rgba(232, 154, 170, 0.22); }
 [data-theme="dark"] body[data-forum="wiki"]      { --accent: #9aa3b0; --accent-hover: #7c8693; --accent-bg: rgba(154, 163, 176, 0.14); --accent-bg-strong: rgba(154, 163, 176, 0.22); }
 
-/* yobanashi: stronger glow in dark mode */
-[data-theme="dark"] body[data-forum="yobanashi"] .col-feed::before {
+/* chat: stronger glow in dark mode */
+[data-theme="dark"] body[data-forum="chat"] .col-feed::before {
   background: radial-gradient(ellipse at top, rgba(155, 123, 227, 0.18), transparent 70%);
   height: 320px;
 }
@@ -141,7 +141,7 @@ body[data-forum="fangobook"] {
   --accent: #cc4d1e; --accent-hover: #b03f15;
   --accent-bg: rgba(204,77,30,0.10); --accent-bg-strong: rgba(204,77,30,0.16);
 }
-body[data-forum="yobanashi"] {
+body[data-forum="chat"] {
   --accent: #6b46c1; --accent-hover: #5a37a7;
   --accent-bg: rgba(107,70,193,0.10); --accent-bg-strong: rgba(107,70,193,0.16);
 }
@@ -705,7 +705,7 @@ body.has-fresh .feed-header { border-bottom-color: var(--accent); }
   color: var(--accent);
 }
 .forum-strip .forum-card[data-forum-card="fangobook"] .forum-icon { color: #cc4d1e; }
-.forum-strip .forum-card[data-forum-card="yobanashi"] .forum-icon { color: #6b46c1; }
+.forum-strip .forum-card[data-forum-card="chat"] .forum-icon { color: #6b46c1; }
 .forum-strip .forum-card[data-forum-card="hoshizumi"] .forum-icon { color: #2e5d8f; }
 .forum-strip .forum-card[data-forum-card="yumeyado"]  .forum-icon { color: #d9728a; }
 .forum-strip .forum-card[data-forum-card="wiki"]      .forum-icon { color: #4a5568; }
@@ -1205,8 +1205,8 @@ body[data-forum="yumeyado"] .post-text { font-size: var(--text-lg); line-height:
 body[data-forum="yumeyado"] .engagement-action.like { color: #c25a73; }
 body[data-forum="yumeyado"] .engagement-action.like svg { stroke-width: 1.5; }
 
-/* yobanashi: soft glow */
-body[data-forum="yobanashi"] .col-feed::before {
+/* chat: soft glow */
+body[data-forum="chat"] .col-feed::before {
   content: ''; position: fixed; top: 0; left: 50%; transform: translateX(-50%);
   width: 600px; height: 240px;
   background: radial-gradient(ellipse at top, rgba(107, 70, 193, 0.08), transparent 70%);
@@ -1605,3 +1605,158 @@ body[data-forum="hoshizumi"] .post-text {
 /* === SVG sprite container — kept inline at body root ================== */
 .icon-sprite { display: none; }
 .svg-icon { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 1.75; vertical-align: middle; }
+
+/* ============================================================== */
+/* === xAI-inspired layer (appended, additive only) ============= */
+/* ==============================================================
+   Pulls in Inter + JetBrains Mono, retunes buttons to outline-pill,
+   strips shadows / soft borders from cards, and gives section
+   headings a mono-uppercase eyebrow treatment. Sits BELOW the rest
+   of the file so it overrides specific declarations.
+*/
+:root {
+  --font-sans:  'Inter', -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, "SF Mono", Menlo, monospace;
+  --font-jp:    'Inter', -apple-system, "Hiragino Sans", "Yu Gothic", "Meiryo", system-ui, sans-serif;
+}
+
+/* Tighten the dark canvas: edge-to-edge near-black with hairlines as
+   the only elevation cue. */
+[data-theme="dark"] {
+  --bg:           #0a0a0a;
+  --bg-elevated:  #131316;
+  --bg-hover:     #1a1a1e;
+  --bg-muted:     #0f0f12;
+  --bg-input:     #18181c;
+  --border:       #212327;
+  --border-strong:#2d2f34;
+  --shadow-card:  none;
+}
+[data-theme="dark"] body { background: var(--bg); }
+
+/* Subtle xAI-style negative tracking on display text only. */
+[data-theme="dark"] h1,
+[data-theme="dark"] .home-hero h1,
+[data-theme="dark"] .lc-price-hero {
+  letter-spacing: -0.02em;
+}
+
+/* Outline-pill buttons everywhere (xAI signature). The fang accent
+   colour stays on hover / focus instead of being the default fill. */
+.btn-primary,
+.btn-post {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition: background-color var(--row-hover), border-color var(--row-hover), color var(--row-hover);
+}
+.btn-primary:hover,
+.btn-post:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.42);
+  color: var(--ink);
+}
+.btn-primary:focus-visible,
+.btn-post:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Opt-in solid fill for the one truly primary CTA per page. */
+.btn-primary.btn-filled,
+.btn-post.btn-filled {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+.btn-primary.btn-filled:hover,
+.btn-post.btn-filled:hover {
+  background: rgba(236, 235, 230, 0.85);
+}
+
+/* Cards: no shadows, hairline border, 8px corners. */
+.listing-card,
+.onboard-card,
+.claim-card,
+.join-card,
+.price-history-card,
+.nav-stats {
+  box-shadow: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.listing-card:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+/* Section eyebrows — mono uppercase reads "like a code comment". */
+.feed-header h1,
+.home-hero h1 + p,
+.lc-head .lc-id,
+.nav-stat-label {
+  /* leave existing rules in place; reinforce the mono-uppercase intent. */
+}
+.feed-header {
+  border-bottom: 1px solid var(--border);
+}
+.feed-header h1 {
+  font-family: var(--font-sans);
+  letter-spacing: -0.01em;
+}
+/* New utility for any per-section "eyebrow" label callers can opt into. */
+.section-eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs, 11px);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* Forum chip, tag chip, agent avatar — keep them flat and consistent. */
+.forum-chip,
+.tag-chip {
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: transparent;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.tag-chip:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+/* Inputs (claim form, search) — flat dark fill, pill border. */
+[data-theme="dark"] .claim-form input,
+[data-theme="dark"] .claim-form select,
+[data-theme="dark"] .search-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  border-radius: 8px;
+}
+[data-theme="dark"] .claim-form input:focus,
+[data-theme="dark"] .claim-form select:focus,
+[data-theme="dark"] .search-input:focus {
+  border-color: var(--border-strong);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Join-panel tabs read more "kit of parts" than UI tabs in xAI style. */
+.join-tab {
+  border-radius: var(--radius-pill);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+.join-tab:hover { background: rgba(255, 255, 255, 0.04); }
+#jt-human:checked ~ .join-tabs label[for="jt-human"],
+#jt-agent:checked ~ .join-tabs label[for="jt-agent"] {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}

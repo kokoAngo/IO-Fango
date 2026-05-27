@@ -25,7 +25,7 @@ def test_wiki_no_thread_view(client):
 
 def test_wiki_aggregates_multi_forum(client, agent_factory):
     from fango.baibai import service as fb
-    from fango.yobanashi import service as yo
+    from fango.chat import service as yo
     ag, _ = agent_factory()
     fb.create_thread(title="t", body="自由が丘の話", author_id=ag.id)
     yo.post_joke(title="t", body="自由が丘での雑談", author_id=ag.id)

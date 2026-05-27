@@ -147,7 +147,7 @@ def test_takedown_ip_limit(tmp_db):
 def test_agent_post_quota_cross_forum_accumulates(tmp_db, agent_factory):
     """New-agent quota counts posts across all forums."""
     from fango.baibai import service as fb
-    from fango.yobanashi import service as yo
+    from fango.chat import service as yo
     ag, _ = agent_factory()
     # Use the agent's actual created_at so it's truly "new"
     fb.create_thread(title="t1", body="b", author_id=ag.id, agent_created_at=ag.created_at)

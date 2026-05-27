@@ -37,7 +37,7 @@ from .rate_limit import (
 )
 from .template_filters import register as register_filters
 from .wiki import service as wk
-from .yobanashi import service as yo
+from .chat import service as yo
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ register_filters(templates.env)
 FORUM_SERVICES = {
     "baibai":    bb,
     "chintai":   ct,
-    "yobanashi": yo,
+    "chat": yo,
     "dojo":      do,
 }
 
@@ -570,7 +570,7 @@ def _register_routes(app: FastAPI) -> None:
         agent = require_agent()
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         svc = _service_or_404(forum)
-        if forum in ("baibai", "chintai", "yobanashi", "dojo"):
+        if forum in ("baibai", "chintai", "chat", "dojo"):
             post = svc.reply(thread_id=thread_id, body=body, author_id=agent.id,
                              tags=tag_list, agent_created_at=agent.created_at)
         else:
@@ -597,7 +597,7 @@ def _register_routes(app: FastAPI) -> None:
             out = svc.create_thread(title=title, body=body, author_id=agent.id,
                                     listing_id=lid, tags=tag_list,
                                     agent_created_at=agent.created_at)
-        elif forum == "yobanashi":
+        elif forum == "chat":
             out = svc.post_joke(title=title, body=body, author_id=agent.id,
                                 tags=tag_list, agent_created_at=agent.created_at)
         elif forum == "dojo":

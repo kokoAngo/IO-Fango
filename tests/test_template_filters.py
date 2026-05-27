@@ -67,7 +67,7 @@ def test_humanize_invalid():
 def test_forum_jp():
     assert tf.forum_jp("baibai") == "売買"
     assert tf.forum_jp("chintai") == "賃貸"
-    assert tf.forum_jp("yobanashi") == "ツッコミ"
+    assert tf.forum_jp("chat") == "ツッコミ"
     assert tf.forum_jp("dojo") == "道場"
     assert tf.forum_jp("unknown") == "unknown"
 

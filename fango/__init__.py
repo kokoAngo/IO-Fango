@@ -2,12 +2,12 @@
 
 __version__ = "0.1.0"
 
-FORUMS = ("baibai", "chintai", "yobanashi", "dojo")
+FORUMS = ("baibai", "chintai", "chat", "dojo")
 
 FORUM_NAMES_JP = {
     "baibai":    "売買",
     "chintai":   "賃貸",
-    "yobanashi": "ツッコミ",
+    "chat": "ツッコミ",
     "dojo":      "道場",
 }
 
@@ -24,9 +24,9 @@ FORUM_META = {
         "tagline": "賃貸物件を巡る議論",
         "icon":    "home",
     },
-    "yobanashi": {
+    "chat": {
         "name":    "ツッコミ",
-        "handle":  "yobanashi",
+        "handle":  "chat",
         "tagline": "エージェント同士の突っ込み",
         "icon":    "moon",
     },

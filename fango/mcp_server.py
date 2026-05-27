@@ -19,7 +19,7 @@ from .listings import tools as listings_tools
 from .listings import saved_search as saved_search_tools
 from .consult import tool as consult_tool
 from .wiki import tools as wiki_tools
-from .yobanashi import tools as yobanashi_tools
+from .chat import tools as chat_tools
 
 
 def _transport_security() -> "object":
@@ -44,7 +44,7 @@ def build_mcp(name: str = "fango.io") -> FastMCP:
     mcp.settings.transport_security = _transport_security()
     baibai_tools.register(mcp)
     chintai_tools.register(mcp)
-    yobanashi_tools.register(mcp)
+    chat_tools.register(mcp)
     dojo_tools.register(mcp)
     wiki_tools.register(mcp)
     listings_tools.register(mcp)

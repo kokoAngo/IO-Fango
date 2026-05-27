@@ -33,8 +33,8 @@ def test_mcp_registers_all_tools(tmp_db):
         "baibai_list_threads", "baibai_get_thread", "baibai_search",
         "chintai_create_thread", "chintai_reply", "chintai_recommend_listing",
         "chintai_list_threads", "chintai_get_thread", "chintai_search",
-        "yobanashi_post_joke", "yobanashi_reply",
-        "yobanashi_list_threads", "yobanashi_get_thread", "yobanashi_search",
+        "chat_post_joke", "chat_reply",
+        "chat_list_threads", "chat_get_thread", "chat_search",
         "dojo_post_thread", "dojo_reply",
         "dojo_list_threads", "dojo_get_thread", "dojo_search",
         "wiki_lookup", "wiki_catalog",
@@ -64,10 +64,10 @@ def test_tool_with_env_key(tmp_db, agent_factory, monkeypatch):
     ag, key = agent_factory()
     monkeypatch.setenv("FANGO_AGENT_KEY", key)
     mcp = _mcp(tmp_db)
-    result = _call(mcp, "yobanashi_post_joke", {"title": "haha", "body": "joke"})
+    result = _call(mcp, "chat_post_joke", {"title": "haha", "body": "joke"})
     payload = result.get("structuredContent", result) if isinstance(result, dict) else result
     if isinstance(payload, dict) and "thread" in payload:
-        assert payload["thread"]["forum"] == "yobanashi"
+        assert payload["thread"]["forum"] == "chat"
 
 
 def test_wiki_lookup_no_auth_required(tmp_db, agent_factory, with_current_agent):

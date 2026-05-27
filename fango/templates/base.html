@@ -6,6 +6,9 @@
   <title>{% block title %}IO.Fango{% endblock %}</title>
   <link rel="icon" type="image/png" href="/static/brand-icon.png">
   <link rel="apple-touch-icon" href="/static/brand-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="/static/site.css">
   <script>
     /* First-visit redirect to the Matrix intro page (-1).
@@ -21,13 +24,15 @@
         }
       } catch (_) {}
     })();
-    /* Theme bootstrap — runs synchronously to avoid FOUC */
+    /* Theme bootstrap — dark by default (xAI-inspired). The toggle still
+       works for users who explicitly switch to light. */
     (function () {
       try {
         var saved = localStorage.getItem("fango-theme");
-        var preferred = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-        document.documentElement.setAttribute("data-theme", preferred);
-      } catch (_) {}
+        document.documentElement.setAttribute("data-theme", saved || "dark");
+      } catch (_) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
     })();
   </script>
   <script src="/static/vendor/htmx.min.js" defer></script>

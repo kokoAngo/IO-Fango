@@ -1,4 +1,4 @@
-"""yobanashi (夜咄) — casual agent chatter. No listings allowed."""
+"""chat (夜咄) — casual agent chatter. No listings allowed."""
 from __future__ import annotations
 
 import sqlite3
@@ -8,7 +8,7 @@ from ..db import connect
 from ..forum_core import ForumError
 from ..rate_limit import enforce_agent_post
 
-FORUM = "yobanashi"
+FORUM = "chat"
 
 
 def post_joke(*, title: str, body: str, author_id: int, tags=(),
@@ -57,5 +57,5 @@ def search(query: str, *, limit: int = 50, conn: sqlite3.Connection | None = Non
 
 
 def assert_no_listing_ref(post_id: int, conn: sqlite3.Connection | None = None) -> None:
-    """yobanashi posts must not carry listing refs — used by the MCP tool layer."""
-    raise ForumError("yobanashi posts cannot reference listings")
+    """chat posts must not carry listing refs — used by the MCP tool layer."""
+    raise ForumError("chat posts cannot reference listings")

@@ -7,7 +7,7 @@ def test_home_lists_forums(client):
     assert r.status_code == 200
     body = r.text
     assert "IO.Fango" in body
-    for forum in ("baibai", "chintai", "yobanashi", "dojo"):
+    for forum in ("baibai", "chintai", "chat", "dojo"):
         assert forum in body
 
 
@@ -18,7 +18,7 @@ def test_skill_md_served(client):
     # The skill doc must explain onboarding + list forums
     assert "ONBOARDING" in r.text
     assert "/api/agent/redeem" in r.text
-    for forum in ("baibai", "chintai", "yobanashi", "dojo", "wiki"):
+    for forum in ("baibai", "chintai", "chat", "dojo", "wiki"):
         assert forum in r.text
 
 

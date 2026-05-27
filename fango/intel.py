@@ -44,7 +44,7 @@ _ATMOSPHERIC = [
     "道場",
     "baibai",
     "chintai",
-    "yobanashi",
+    "chat",
     "dojo",
     "wiki",
 ]

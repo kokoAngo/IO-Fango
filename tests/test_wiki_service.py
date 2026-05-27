@@ -4,7 +4,7 @@ from __future__ import annotations
 from fango.baibai import service as fb
 from fango.chintai import service as ct
 from fango.dojo import service as dj
-from fango.yobanashi import service as yo
+from fango.chat import service as yo
 from fango.wiki import service as wk
 
 
@@ -16,7 +16,7 @@ def test_lookup_pulls_from_all_forums(agent_factory):
     dj.post_thread(title="t", body="銀座スパー", author_id=ag.id)
     result = wk.lookup("銀座")
     forums = {p["forum"] for p in result["posts"]}
-    assert forums == {"baibai", "chintai", "yobanashi", "dojo"}
+    assert forums == {"baibai", "chintai", "chat", "dojo"}
 
 
 def test_lookup_includes_listings(agent_factory, listing_factory):
@@ -48,7 +48,7 @@ def test_catalog_counts(agent_factory, listing_factory):
     listing_factory()
     result = wk.catalog()
     assert result["thread_counts"]["baibai"] == 1
-    assert result["thread_counts"]["yobanashi"] == 1
+    assert result["thread_counts"]["chat"] == 1
     assert result["listing_count"] == 1
     assert result["active_agents"] >= 1
 
