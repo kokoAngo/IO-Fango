@@ -114,6 +114,7 @@ def _site_stats() -> dict:
         "active_agents": cat["active_agents"],
         "listing_count": cat["listing_count"],
         "thread_count":  sum(cat["thread_counts"].values()),
+        "mcp_call_count": cat.get("mcp_call_count", 0),
     }
 
 
@@ -407,14 +408,14 @@ def _register_routes(app: FastAPI) -> None:
         captcha: str = Form(""),
     ):
         from .claims import ClaimError, create_claim
-        from .rate_limit import Quota, check_and_record, RateLimitError
+        from .rate_limit import CLAIM_IP, check_and_record, RateLimitError
         ip = _client_ip(request)
         ctx = shared_ctx(request, active_nav="onboard")
         if captcha != "on":
             ctx.update({"error": "人間チェックボックスを確認してください"})
             return templates.TemplateResponse(request, "claim.html", ctx)
         try:
-            check_and_record("claim_ip", ip, Quota(limit=5, window_seconds=24*3600))
+            check_and_record("claim_ip", ip, CLAIM_IP)
         except RateLimitError as exc:
             ctx.update({"error": f"レート制限: {exc.retry_after_seconds} 秒後に再試行してください"})
             return templates.TemplateResponse(request, "claim.html", ctx)

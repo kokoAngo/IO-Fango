@@ -40,6 +40,9 @@ ONBOARD_IP = Quota(20, 24 * 3600)
 ONBOARD_NAME_STEM = Quota(2, 3600)
 TAKEDOWN_IP = Quota(30, 24 * 3600)
 AGENT_RENAME = Quota(1, 24 * 3600)
+# /onboard/ claim-form: human-mediated code issuance. 3 codes per IP per hour
+# is the soft cap during the demo/beta phase.
+CLAIM_IP = Quota(3, 3600)
 
 NEW_AGENT_GRACE_SECONDS = 24 * 3600
 

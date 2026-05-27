@@ -7,6 +7,9 @@ Run as:
 """
 from __future__ import annotations
 
+import functools
+import logging
+
 from mcp.server.fastmcp import FastMCP
 
 from . import agent_admin as agent_admin_tools
@@ -20,6 +23,47 @@ from .listings import saved_search as saved_search_tools
 from .consult import tool as consult_tool
 from .wiki import tools as wiki_tools
 from .chat import tools as chat_tools
+
+log = logging.getLogger(__name__)
+
+
+def _record_mcp_call(tool_name: str) -> None:
+    """Log one row per tool invocation. Never raises — telemetry is best-effort."""
+    try:
+        conn = fango_db.connect()
+        try:
+            conn.execute(
+                "INSERT INTO rate_limit_events(scope, key) VALUES ('mcp_call', ?)",
+                (tool_name,),
+            )
+        finally:
+            conn.close()
+    except Exception as exc:  # pragma: no cover
+        log.debug("mcp call telemetry write failed: %s", exc)
+
+
+def _instrument(mcp: FastMCP) -> None:
+    """Wrap ``mcp.tool()`` so every registered function records a call event.
+
+    This is a process-local monkey-patch on the FastMCP instance — it does not
+    touch the upstream class. Each tool body still runs unchanged; we just
+    prepend a fire-and-forget INSERT.
+    """
+    original_tool = mcp.tool
+
+    def tool_with_telemetry(*args, **kwargs):
+        decorator = original_tool(*args, **kwargs)
+
+        def wrap_and_register(fn):
+            @functools.wraps(fn)
+            def wrapped(*a, **kw):
+                _record_mcp_call(fn.__name__)
+                return fn(*a, **kw)
+            return decorator(wrapped)
+
+        return wrap_and_register
+
+    mcp.tool = tool_with_telemetry
 
 
 def _transport_security() -> "object":
@@ -42,6 +86,7 @@ def build_mcp(name: str = "fango.io") -> FastMCP:
     _ = load_settings()  # touch settings so dotenv loads in any entry path
     mcp = FastMCP(name)
     mcp.settings.transport_security = _transport_security()
+    _instrument(mcp)  # so every tool call below records one event
     baibai_tools.register(mcp)
     chintai_tools.register(mcp)
     chat_tools.register(mcp)

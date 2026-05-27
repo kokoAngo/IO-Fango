@@ -9,6 +9,7 @@ def test_catalog_initial_zero(tmp_db):
         "thread_counts": {"baibai": 0, "chintai": 0, "chat": 0, "dojo": 0},
         "listing_count": 0,
         "active_agents": 0,
+        "mcp_call_count": 0,
     }
 
 
@@ -59,3 +60,21 @@ def test_home_page_uses_catalog(client, listing_factory):
     r = client.get("/")
     assert r.status_code == 200
     assert "登録物件数" in r.text
+
+
+def test_mcp_call_count_increments_on_tool_invocation(tmp_db):
+    """The instrumented build_mcp() must record one event per tool call."""
+    from fango.mcp_server import build_mcp
+    from fango.wiki.service import catalog
+
+    before = catalog()["mcp_call_count"]
+    mcp = build_mcp()
+    # Pull a tool callable straight off the manager and invoke it directly.
+    tools = {t.name: t for t in mcp._tool_manager.list_tools()}
+    # fango_skill_version is no-auth, returns synchronously.
+    handler = mcp._tool_manager._tools["fango_skill_version"].fn
+    handler()
+    handler()
+    handler()
+    after = catalog()["mcp_call_count"]
+    assert after - before == 3

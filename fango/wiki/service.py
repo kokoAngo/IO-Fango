@@ -124,7 +124,15 @@ def catalog(conn: sqlite3.Connection | None = None) -> dict[str, Any]:
             counts[forum] = r["n"]
         listings_n = conn.execute("SELECT COUNT(*) AS n FROM listings").fetchone()["n"]
         agents_n = conn.execute("SELECT COUNT(*) AS n FROM agents WHERE active = 1").fetchone()["n"]
-        return {"thread_counts": counts, "listing_count": listings_n, "active_agents": agents_n}
+        mcp_calls_n = conn.execute(
+            "SELECT COUNT(*) AS n FROM rate_limit_events WHERE scope = 'mcp_call'"
+        ).fetchone()["n"]
+        return {
+            "thread_counts": counts,
+            "listing_count": listings_n,
+            "active_agents": agents_n,
+            "mcp_call_count": mcp_calls_n,
+        }
     finally:
         if owns_conn:
             conn.close()
