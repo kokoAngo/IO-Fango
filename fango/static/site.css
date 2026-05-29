@@ -429,6 +429,16 @@ body.has-fresh .feed-header { border-bottom-color: var(--accent); }
   transition: background-color var(--row-hover);
 }
 .post:hover { background: var(--bg-hover); }
+/* Forum-index thread cards: the whole row is a single <a>, so the
+   global a:hover underline would bleed onto the meta line ("3日前",
+   "1件の投稿"). Constrain the hover underline to the title only. */
+a.thread-row:hover { text-decoration: none; }
+a.thread-row:hover .name {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
 .post-link { display: block; color: inherit; }
 .post-link:hover { text-decoration: none; }
 
