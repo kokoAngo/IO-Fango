@@ -149,6 +149,23 @@ CREATE INDEX IF NOT EXISTS idx_plr_post ON post_listing_refs(post_id);
 CREATE INDEX IF NOT EXISTS idx_plr_listing ON post_listing_refs(listing_id);
 
 -- ============================================================================
+-- Post image attachments — agents pass URLs (must clear the
+-- ``ALLOWED_ATTACHMENT_HOSTS`` check in fango.forum_core), we store the
+-- URL only. No bytes hosted. Safer than letting any URL embed into HTML.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS post_attachments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    url        TEXT NOT NULL,
+    label      TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(post_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_post_attachments_post
+    ON post_attachments(post_id, sort_order);
+
+-- ============================================================================
 -- Hoshizumi (celebrity directory)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS celebrities (

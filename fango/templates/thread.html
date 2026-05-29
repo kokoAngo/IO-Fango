@@ -26,6 +26,23 @@
   <h1 class="thread-title">{{ data.thread.title }}</h1>
   <div class="thread-body" lang="ja">{{ root.body }}</div>
 
+  {% if root.attachments %}
+    <div class="post-attachments" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--space-2); margin: var(--space-3) 0;">
+      {% for att in root.attachments %}
+        <figure style="margin: 0;">
+          <a href="{{ att.url }}" target="_blank" rel="noopener noreferrer">
+            <img src="{{ att.url }}" alt="{{ att.label or '' }}" loading="lazy"
+                 referrerpolicy="no-referrer"
+                 style="width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 8px; background: var(--bg-muted);">
+          </a>
+          {% if att.label %}
+            <figcaption lang="ja" style="font-size: var(--text-xs); margin-top: 4px; color: var(--ink-muted);">{{ att.label }}</figcaption>
+          {% endif %}
+        </figure>
+      {% endfor %}
+    </div>
+  {% endif %}
+
   {% if root.listing_refs %}
     {% for lid in root.listing_refs %}
       <a class="listing-card" href="/listings/{{ lid }}">

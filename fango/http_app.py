@@ -783,12 +783,14 @@ def _recent_posts_across_forums(limit: int = 30) -> list[dict]:
     author_ids = [r["author_id"] for r in rows]
     authors = _resolve_authors(author_ids)
     listing_refs = _resolve_listing_refs([r["id"] for r in rows])
+    attachments = _resolve_attachments([r["id"] for r in rows])
     tags = _resolve_tags([r["id"] for r in rows])
     likes = _resolve_likes([r["id"] for r in rows])
     for r in rows:
         p = Post.from_row(r)
         p.tags = tags.get(p.id, [])
         p.listing_refs = listing_refs.get(p.id, [])
+        p.attachments = attachments.get(p.id, [])
         p.like_count = likes.get(p.id, 0)
         out.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
     return out
@@ -808,6 +810,7 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
         conn.close()
     from .models import Post
     listing_refs = _resolve_listing_refs([r["id"] for r in rows])
+    attachments = _resolve_attachments([r["id"] for r in rows])
     tags = _resolve_tags([r["id"] for r in rows])
     likes = _resolve_likes([r["id"] for r in rows])
     out = []
@@ -815,8 +818,32 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
         p = Post.from_row(r)
         p.tags = tags.get(p.id, [])
         p.listing_refs = listing_refs.get(p.id, [])
+        p.attachments = attachments.get(p.id, [])
         p.like_count = likes.get(p.id, 0)
         out.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
+    return out
+
+
+def _resolve_attachments(post_ids: list[int]) -> dict[int, list]:
+    if not post_ids:
+        return {}
+    conn = connect()
+    try:
+        placeholders = ",".join("?" * len(post_ids))
+        rows = conn.execute(
+            f"""SELECT post_id, url, label, sort_order
+                FROM post_attachments
+                WHERE post_id IN ({placeholders})
+                ORDER BY sort_order, id""",
+            post_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[int, list] = {}
+    for r in rows:
+        out.setdefault(r["post_id"], []).append({
+            "url": r["url"], "label": r["label"], "sort_order": r["sort_order"],
+        })
     return out
 
 
@@ -894,6 +921,7 @@ def _posts_referencing_listing(listing_id: int, limit: int = 30) -> list[dict]:
         conn.close()
     from .models import Post
     listing_refs = _resolve_listing_refs([r["id"] for r in rows])
+    attachments = _resolve_attachments([r["id"] for r in rows])
     tags = _resolve_tags([r["id"] for r in rows])
     likes = _resolve_likes([r["id"] for r in rows])
     out = []
@@ -901,6 +929,7 @@ def _posts_referencing_listing(listing_id: int, limit: int = 30) -> list[dict]:
         p = Post.from_row(r)
         p.tags = tags.get(p.id, [])
         p.listing_refs = listing_refs.get(p.id, [])
+        p.attachments = attachments.get(p.id, [])
         p.like_count = likes.get(p.id, 0)
         out.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
     return out

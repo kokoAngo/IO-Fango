@@ -22,6 +22,23 @@
 
     <div class="post-text" lang="ja">{{ post.body }}</div>
 
+    {% if post.attachments %}
+      <div class="post-attachments" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--space-2); margin-top: var(--space-2);">
+        {% for att in post.attachments %}
+          <figure style="margin: 0;">
+            <a href="{{ att.url }}" target="_blank" rel="noopener noreferrer">
+              <img src="{{ att.url }}" alt="{{ att.label or '' }}" loading="lazy"
+                   referrerpolicy="no-referrer"
+                   style="width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 8px; background: var(--bg-muted);">
+            </a>
+            {% if att.label %}
+              <figcaption lang="ja" style="font-size: var(--text-xs); margin-top: 4px; color: var(--ink-muted);">{{ att.label }}</figcaption>
+            {% endif %}
+          </figure>
+        {% endfor %}
+      </div>
+    {% endif %}
+
     {% if post.listing_refs %}
       {% for ref in post.listing_refs %}
         {% if ref is mapping %}

@@ -134,6 +134,129 @@ def reply(
             conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Image attachments
+# ---------------------------------------------------------------------------
+
+# Default URL allow-list. The MCP tool refuses attachment URLs whose host
+# doesn't end in one of these suffixes. Override at startup with the env
+# var ``FANGO_ATTACHMENT_HOSTS=fango.io.ngrok.app,i.imgur.com,...``.
+_DEFAULT_ATTACHMENT_HOSTS: tuple[str, ...] = (
+    "fango.io.ngrok.app",
+    "ngrok.app",
+    "ngrok-free.app",
+    "trycloudflare.com",
+    "serveousercontent.com",
+    "localhost",
+    "127.0.0.1",
+    "i.imgur.com",
+    "imgur.com",
+    "pbs.twimg.com",
+)
+
+MAX_ATTACHMENTS_PER_POST = 10
+MAX_ATTACHMENT_URL_LEN = 2048
+
+
+def _attachment_hosts() -> tuple[str, ...]:
+    import os
+    raw = os.environ.get("FANGO_ATTACHMENT_HOSTS")
+    if not raw:
+        return _DEFAULT_ATTACHMENT_HOSTS
+    return tuple(h.strip() for h in raw.split(",") if h.strip())
+
+
+def _validate_attachment_url(url: str) -> str:
+    """Normalised URL, or raises ForumError. Rejects non-https, oversize,
+    or hosts outside the allow-list."""
+    import re as _re
+    from urllib.parse import urlparse
+
+    url = (url or "").strip()
+    if not url:
+        raise ForumError("attachment URL is empty")
+    if len(url) > MAX_ATTACHMENT_URL_LEN:
+        raise ForumError(f"attachment URL longer than {MAX_ATTACHMENT_URL_LEN} chars")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        raise ForumError("attachment URL must use http or https")
+    if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1"):
+        raise ForumError("non-localhost attachment URLs must use https")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise ForumError("attachment URL must include a host")
+    allowed = _attachment_hosts()
+    if not any(host == h or host.endswith("." + h) for h in allowed):
+        raise ForumError(
+            f"attachment host {host!r} not allowed; "
+            f"hosts allowed: {', '.join(allowed)}"
+        )
+    return url
+
+
+def attach_image(
+    post_id: int,
+    url: str,
+    label: str | None = None,
+    sort_order: int | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Attach one image URL to ``post_id``. Returns the new attachment id
+    (or the existing id if the URL was already attached). Enforces the
+    per-post cap and the URL allow-list."""
+    url = _validate_attachment_url(url)
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        p = conn.execute("SELECT id FROM posts WHERE id = ?", (post_id,)).fetchone()
+        if p is None:
+            raise ForumError(f"post {post_id} not found")
+        existing = conn.execute(
+            "SELECT COUNT(*) AS n FROM post_attachments WHERE post_id = ?", (post_id,),
+        ).fetchone()["n"]
+        if existing >= MAX_ATTACHMENTS_PER_POST:
+            raise ForumError(
+                f"post already has {existing} attachments (max {MAX_ATTACHMENTS_PER_POST})"
+            )
+        if sort_order is None:
+            sort_order = existing
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO post_attachments(post_id, url, label, sort_order)
+               VALUES (?, ?, ?, ?)""",
+            (post_id, url, label, int(sort_order)),
+        )
+        if cur.rowcount == 0:
+            row = conn.execute(
+                "SELECT id FROM post_attachments WHERE post_id = ? AND url = ?",
+                (post_id, url),
+            ).fetchone()
+            return row["id"] if row else 0
+        return cur.lastrowid
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def list_attachments(
+    post_id: int, conn: sqlite3.Connection | None = None
+) -> list[dict[str, Any]]:
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        rows = conn.execute(
+            """SELECT id, url, label, sort_order
+               FROM post_attachments WHERE post_id = ?
+               ORDER BY sort_order, id""",
+            (post_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def attach_listing(post_id: int, listing_id: int, note: str | None = None,
                    conn: sqlite3.Connection | None = None) -> int:
     owns_conn = conn is None
@@ -275,6 +398,13 @@ def get_thread(
             post.listing_refs = [
                 row["listing_id"] for row in conn.execute(
                     "SELECT listing_id FROM post_listing_refs WHERE post_id = ?", (post.id,)
+                )
+            ]
+            post.attachments = [
+                {"url": row["url"], "label": row["label"], "sort_order": row["sort_order"]}
+                for row in conn.execute(
+                    "SELECT url, label, sort_order FROM post_attachments "
+                    "WHERE post_id = ? ORDER BY sort_order, id", (post.id,),
                 )
             ]
             lc = conn.execute(
