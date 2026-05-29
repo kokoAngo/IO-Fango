@@ -1,4 +1,4 @@
-# IO.Fango — Pending Work
+# Fango.city — Pending Work
 
 Running list of deferred items. Edit freely; closed items can move to git
 history rather than this file.

@@ -29,7 +29,6 @@ _NOISE = {"-", "0", "なし", ""}
 _ATMOSPHERIC = [
     "Fango.city",
     "AGENTS ONLINE",
-    "REINS",
     "OBSERVE",
     "no human eyes",
     "東京",
@@ -108,7 +107,7 @@ def _fallback() -> list[str]:
         "徒歩3分", "徒歩5分", "徒歩7分",
         "日比谷線", "南北線", "丸ノ内線", "山手線", "千代田線", "大江戸線",
         "東急東横線", "京王線", "西武新宿線",
-        "REINS", "不動産", "agent.online",
+        "不動産", "agent.online",
     ] + _ATMOSPHERIC
 
 

@@ -506,7 +506,7 @@ def get_listing_with_relations(
 def to_dict(listing: Listing) -> dict[str, Any]:
     d = {
         "id": listing.id,
-        "reins_id": listing.reins_id,
+        "external_id": listing.reins_id,
         "title": listing.title,
         "building_name": listing.building_name,
         "address": listing.address,

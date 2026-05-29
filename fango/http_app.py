@@ -431,7 +431,7 @@ def _register_routes(app: FastAPI) -> None:
     async def listing_detail(listing_id: int, request: Request):
         """Public SSR — intentionally limited to a marketing-grade preview.
 
-        Deep fields (REINS id, source URL, agent company, raw_json, full
+        Deep fields (external id, source URL, agent company, raw_json, full
         price history, full gallery, building stats, cross-referencing
         posts) are *omitted on purpose* so a bot fetching the HTML can't
         rebuild the database. Agents with a key get the full payload via
@@ -446,8 +446,8 @@ def _register_routes(app: FastAPI) -> None:
         thumbnail = None
         for img in bundle["images"]:
             if img.get("kind") == "raw":
-                filename = (img.get("rel_path") or "").rsplit("/", 1)[-1]
-                thumbnail = f"/listings/img/{listing_id}/raw/{filename}"
+                seq = int(img.get("sort_order") or 0) + 1
+                thumbnail = f"/listings/img/{listing_id}/raw/{seq}.jpg"
                 break
         # Transports trimmed to first 2 (enough for "do I want to look closer?").
         transports = bundle["transports"][:2]
@@ -488,30 +488,29 @@ def _register_routes(app: FastAPI) -> None:
         }[filename.rsplit(".", 1)[1]]
         return FileResponse(str(path), media_type=mime)
 
-    @app.get("/listings/img/{listing_id}/{kind}/{filename}")
-    async def serve_listing_image(listing_id: int, kind: str, filename: str):
+    @app.get("/listings/img/{listing_id}/{kind}/{seq}.jpg")
+    async def serve_listing_image(listing_id: int, kind: str, seq: int):
+        # URL carries only the 1-based seq, never the disk filename, so
+        # the raw upstream naming (which could leak the source system)
+        # stays internal.
         from fastapi.responses import FileResponse
         if kind not in _VALID_IMAGE_KINDS:
             raise HTTPException(status_code=400, detail="invalid kind")
-        # Block path traversal — filename must be a plain basename.
-        if "/" in filename or ".." in filename or filename.startswith("."):
-            raise HTTPException(status_code=400, detail="invalid filename")
-        if not _is_safe_image_name(filename):
-            raise HTTPException(status_code=400, detail="invalid filename")
+        if seq < 1 or seq > 9999:
+            raise HTTPException(status_code=400, detail="invalid seq")
         conn = connect()
         try:
             row = conn.execute(
                 """SELECT rel_path FROM listing_images
-                   WHERE listing_id = ? AND kind = ? AND rel_path LIKE ?
-                   ORDER BY sort_order LIMIT 1""",
-                (listing_id, kind, f"%/{filename}"),
+                   WHERE listing_id = ? AND kind = ? AND sort_order = ?
+                   LIMIT 1""",
+                (listing_id, kind, seq - 1),
             ).fetchone()
         finally:
             conn.close()
         if row is None:
             raise HTTPException(status_code=404, detail="image not found")
         abs_path = (REPO_ROOT_FS / row["rel_path"]).resolve()
-        # Defence-in-depth: the resolved path must remain under repo root.
         try:
             abs_path.relative_to(REPO_ROOT_FS.resolve())
         except ValueError:

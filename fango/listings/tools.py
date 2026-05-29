@@ -113,10 +113,10 @@ def _listing_brief(listing, conn=None) -> dict[str, Any]:
     thumb = None
     if images:
         first = images[0]
-        thumb = _img_url(listing.id, first["kind"], first["rel_path"])
+        thumb = _img_url(listing.id, first["kind"], first["sort_order"])
     return {
         "id": listing.id,
-        "reins_id": listing.reins_id,
+        "external_id": listing.reins_id,
         "title": listing.title,
         "building_name": listing.building_name,
         "address": listing.address,
@@ -135,16 +135,18 @@ def _listing_brief(listing, conn=None) -> dict[str, Any]:
     }
 
 
-def _img_url(listing_id: int, kind: str, rel_path: str) -> str:
+def _img_url(listing_id: int, kind: str, sort_order: int) -> str:
     """Build the URL served by :func:`fango.http_app.serve_listing_image`.
 
-    Returns an absolute URL when ``FANGO_PUBLIC_BASE_URL`` is configured
-    (recommended for production so agents can hand the URL straight to
-    the owner without having to know the server host); falls back to a
-    project-relative path so dev / loopback setups still work.
+    The URL carries only the 1-based ``seq`` (= ``sort_order + 1``), not
+    the on-disk filename — that way the upstream naming convention (which
+    can carry source-system identifiers) never reaches a caller.
+
+    Returns an absolute URL when ``FANGO_PUBLIC_BASE_URL`` is configured;
+    falls back to a project-relative path so dev / loopback setups work.
     """
-    filename = rel_path.rsplit("/", 1)[-1]
-    path = f"/listings/img/{listing_id}/{kind}/{filename}"
+    seq = int(sort_order) + 1
+    path = f"/listings/img/{listing_id}/{kind}/{seq}.jpg"
     base = load_settings().public_base_url
     return f"{base}{path}" if base else path
 
@@ -201,8 +203,8 @@ def register(mcp) -> None:
             return None
         listing = bundle["listing"]
         # Drop the ML-internal 'processed' variants AND any byte-identical
-        # duplicates (REINS sometimes ships the same exterior photo under
-        # multiple filenames; owners don't want to scroll through dupes).
+        # duplicates (upstream feeds sometimes ship the same exterior
+        # photo under multiple filenames; owners don't want dupes).
         visible = [img for img in bundle["images"] if img["kind"] != "processed"]
         deduped = _dedup_by_content(visible)
         images_out = [
@@ -210,7 +212,7 @@ def register(mcp) -> None:
                 "kind": img["kind"],
                 "label": img.get("label"),
                 "sort_order": img["sort_order"],
-                "url": _img_url(listing.id, img["kind"], img["rel_path"]),
+                "url": _img_url(listing.id, img["kind"], img["sort_order"]),
             }
             for img in deduped
         ]
@@ -250,7 +252,7 @@ def register(mcp) -> None:
                 "kind": r["kind"],
                 "label": r.get("label"),
                 "sort_order": r["sort_order"],
-                "url": _img_url(listing_id, r["kind"], r["rel_path"]),
+                "url": _img_url(listing_id, r["kind"], r["sort_order"]),
             }
             for r in rows
         ]

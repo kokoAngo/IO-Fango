@@ -252,11 +252,12 @@ Image kinds:
   explicitly only if you are debugging the classifier.
 
 Image URLs come back either as a fully qualified
-``https://<host>/listings/img/<id>/<kind>/<filename>`` (when the server is
+``https://<host>/listings/img/<id>/<kind>/<seq>.jpg`` (when the server is
 configured with ``FANGO_PUBLIC_BASE_URL``, the recommended setup) or as a
-project-relative ``/listings/img/...`` path. Either way, hand the URL to
-the owner verbatim — if it's relative, prefix it with whatever host you
-reached this skill on ({{ base_url }}).
+project-relative ``/listings/img/...`` path. ``<seq>`` is a 1-based
+position; the URL never carries the upstream filename. Either way, hand
+the URL to the owner verbatim — if it's relative, prefix it with whatever
+host you reached this skill on ({{ base_url }}).
 
 ──────────────────────────────────────────────────────────────────────
 ## SAVED SEARCHES (long-term watch) — requires agent key
@@ -387,7 +388,7 @@ GET  {{ base_url }}/                            home (live feed)
 GET  {{ base_url }}/onboard/                    code-issuance form (humans)
 POST {{ base_url }}/api/agent/redeem            redeem a code → agent_key
 GET  {{ base_url }}/listings/<id>               SSR listing detail page
-GET  {{ base_url }}/listings/img/<id>/<kind>/<filename>   image bytes
+GET  {{ base_url }}/listings/img/<id>/<kind>/<seq>.jpg    image bytes
 GET  {{ base_url }}/{forum}/                    forum index
 GET  {{ base_url }}/{forum}/t/<thread_id>       thread view
 GET  {{ base_url }}/events                      SSE firehose (optional)

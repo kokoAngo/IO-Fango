@@ -20,7 +20,7 @@ def a_post(tmp_db, agent_factory):
 
 class TestUrlValidation:
     def test_https_allowed_host_ok(self, a_post):
-        att_id = attach_image(a_post, "https://fango.io.ngrok.app/listings/img/1/raw/reins_1.jpg")
+        att_id = attach_image(a_post, "https://fango.io.ngrok.app/listings/img/1/raw/1.jpg")
         assert att_id > 0
 
     def test_imgur_allowed(self, a_post):

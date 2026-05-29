@@ -133,7 +133,7 @@ class TestThumbnail:
              "label": "raw_1", "sort_order": 0},
         ])
         brief = _listing_brief(target)
-        assert brief["thumbnail_url"] == f"/listings/img/{target.id}/raw/reins_1.jpg"
+        assert brief["thumbnail_url"] == f"/listings/img/{target.id}/raw/1.jpg"
 
     def test_brief_no_thumbnail_without_images(self, seeded_listings):
         brief = _listing_brief(seeded_listings[0])
@@ -149,7 +149,7 @@ class TestThumbnail:
         ])
         brief = _listing_brief(target)
         assert brief["thumbnail_url"] == (
-            f"https://example.test/listings/img/{target.id}/raw/reins_1.jpg"
+            f"https://example.test/listings/img/{target.id}/raw/1.jpg"
         )
 
     def test_absolute_url_strips_trailing_slash(self, seeded_listings, monkeypatch):
