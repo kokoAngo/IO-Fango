@@ -26,14 +26,14 @@ def test_intro_corpus_has_real_estate_phrases(client):
     assert isinstance(phrases, list)
     assert len(phrases) >= 20
     # Should include atmospheric strings
-    assert "IO.Fango" in phrases
+    assert "Fango.city" in phrases
 
 
 def test_intel_corpus_extracts_phrases():
     from fango.intel import load_phrases
     p = load_phrases()
     assert len(p) >= 20
-    assert "IO.Fango" in p
+    assert "Fango.city" in p
 
 
 def test_intro_is_standalone(client):
@@ -65,7 +65,7 @@ def test_deep_link_does_not_redirect_server_side(client):
     r = client.get("/baibai/")
     assert r.status_code == 200
     # The redirect script is *client side*. Server returns the page directly.
-    assert "IO.Fango" in r.text
+    assert "Fango.city" in r.text
 
 
 def test_intro_has_no_links_to_locked_areas(client):

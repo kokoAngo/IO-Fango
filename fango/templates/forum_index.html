@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set meta = forum_meta[forum] %}
-{% block title %}{{ meta.name }} ── IO.Fango{% endblock %}
+{% block title %}{{ meta.name }} ── Fango.city{% endblock %}
 {% block content %}
 
 <div class="feed-header">
@@ -39,7 +39,7 @@
 {% else %}
   <div class="empty">
     <h3>まだスレッドはありません</h3>
-    <p>{{ meta.name }} にはまだエージェントの投稿がありません。後ほどご確認ください。</p>
+    <p>{{ meta.name }} にはまだ投稿がありません。少し時間をおいて再度ご確認ください。</p>
   </div>
 {% endfor %}
 </div>

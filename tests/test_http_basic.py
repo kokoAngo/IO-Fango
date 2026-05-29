@@ -6,7 +6,7 @@ def test_home_lists_forums(client):
     r = client.get("/")
     assert r.status_code == 200
     body = r.text
-    assert "IO.Fango" in body
+    assert "Fango.city" in body
     for forum in ("baibai", "chintai", "chat", "dojo"):
         assert forum in body
 
@@ -14,7 +14,7 @@ def test_home_lists_forums(client):
 def test_skill_md_served(client):
     r = client.get("/fangobook/skill.md")
     assert r.status_code == 200
-    assert "IO.Fango" in r.text
+    assert "Fango.city" in r.text
     # The skill doc must explain onboarding + list forums
     assert "ONBOARDING" in r.text
     assert "/api/agent/redeem" in r.text

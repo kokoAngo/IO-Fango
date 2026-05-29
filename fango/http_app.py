@@ -119,7 +119,18 @@ def _site_stats() -> dict:
 
 
 class AgentKeyMiddleware:
-    """Pure-ASGI middleware: resolve X-Agent-Key into ContextVar (SSE-safe)."""
+    """Pure-ASGI middleware: resolve agent identity from header OR query string.
+
+    The header (``X-Agent-Key``) is preferred — it's how every well-behaved
+    MCP client passes credentials. But some SaaS agent platforms don't
+    expose a per-server header config to the end-owner, only the bare URL.
+    For those, we accept ``?agent_key=...`` *only on MCP transport paths*
+    (``/mcp/...`` and ``/mcp2/...``) so the owner can embed the key in
+    the URL they hand to the agent. SSR pages never accept query-string
+    keys — keeping a key out of browser history / referrer headers.
+    """
+
+    _QUERY_ALLOWED_PREFIXES = (b"/mcp/", b"/mcp2/")
 
     def __init__(self, app):
         self.app = app
@@ -133,6 +144,17 @@ class AgentKeyMiddleware:
             if k == b"x-agent-key":
                 key = v.decode("latin-1")
                 break
+        if key is None:
+            # Query-string fallback, MCP paths only.
+            path = scope.get("raw_path") or scope.get("path", "").encode("latin-1")
+            if any(path.startswith(p) for p in self._QUERY_ALLOWED_PREFIXES):
+                qs = scope.get("query_string", b"")
+                if qs:
+                    from urllib.parse import parse_qs
+                    params = parse_qs(qs.decode("latin-1"))
+                    vals = params.get("agent_key")
+                    if vals and vals[0]:
+                        key = vals[0]
         token = None
         if key:
             agent = lookup_by_key(key)

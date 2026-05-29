@@ -24,6 +24,12 @@ def tmp_db(tmp_path, monkeypatch):
     # should run as if it's unset so assertions about relative image URLs
     # stay valid regardless of who's running them.
     monkeypatch.delenv("FANGO_PUBLIC_BASE_URL", raising=False)
+    # FastAPI TestClient uses Host: testserver. Make the MCP host allowlist
+    # accept it so /mcp* endpoints are reachable in tests.
+    monkeypatch.setenv(
+        "FANGO_MCP_ALLOWED_HOSTS",
+        "localhost,127.0.0.1,testserver",
+    )
     fango_db.reset_bootstrap_cache()
     fango_db.bootstrap(db_path)
     yield db_path
@@ -82,18 +88,30 @@ def with_current_agent():
 
 @pytest.fixture
 def http_app(tmp_db):
-    """FastAPI app with a fresh DB."""
-    # Importing here so monkeypatched env var is picked up.
+    """FastAPI app with a fresh DB.
+
+    Also resets the module-level MCP singleton so each test gets a fresh
+    StreamableHTTPSessionManager (its ``run()`` can only be called once
+    per instance).
+    """
     import importlib
-    from fango import http_app as mod
+    from fango import mcp_server, http_app as mod
+    mcp_server._mcp_singleton = None
     importlib.reload(mod)
     return mod.app
 
 
 @pytest.fixture
 def client(http_app):
+    """FastAPI TestClient.
+
+    The context-manager form triggers the lifespan startup, which is
+    required for the streamable-HTTP MCP session manager (otherwise tools
+    hitting /mcp2/mcp fail with "Task group is not initialized").
+    """
     from fastapi.testclient import TestClient
-    return TestClient(http_app)
+    with TestClient(http_app) as c:
+        yield c
 
 
 @pytest.fixture

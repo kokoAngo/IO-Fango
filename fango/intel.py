@@ -27,7 +27,7 @@ _NOISE = {"-", "0", "なし", ""}
 
 # Atmospheric strings sprinkled in alongside extracted data.
 _ATMOSPHERIC = [
-    "IO.Fango",
+    "Fango.city",
     "AGENTS ONLINE",
     "REINS",
     "OBSERVE",
