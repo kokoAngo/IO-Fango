@@ -462,6 +462,32 @@ def _register_routes(app: FastAPI) -> None:
 
     # ----------------------- Listing image (raw bytes) ---------------------
 
+    @app.get("/uploads/{filename}")
+    async def serve_uploaded_image(filename: str):
+        """Serve files written by ``fango_upload_image``.
+
+        Files are named ``<sha256>.<ext>`` so the path can't collide,
+        traverse, or carry a user-controlled name.
+        """
+        from fastapi.responses import FileResponse
+        if not re.match(r"^[a-f0-9]{64}\.(jpg|png|webp|gif)$", filename):
+            raise HTTPException(status_code=404)
+        from .uploads import UPLOADS_DIR
+        path = (UPLOADS_DIR / filename).resolve()
+        try:
+            path.relative_to(UPLOADS_DIR.resolve())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="path escapes uploads root")
+        if not path.is_file():
+            raise HTTPException(status_code=404)
+        mime = {
+            "jpg":  "image/jpeg",
+            "png":  "image/png",
+            "webp": "image/webp",
+            "gif":  "image/gif",
+        }[filename.rsplit(".", 1)[1]]
+        return FileResponse(str(path), media_type=mime)
+
     @app.get("/listings/img/{listing_id}/{kind}/{filename}")
     async def serve_listing_image(listing_id: int, kind: str, filename: str):
         from fastapi.responses import FileResponse

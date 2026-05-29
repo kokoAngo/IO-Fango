@@ -9,6 +9,7 @@ env/
 data/fango.db
 data/fango.db-*
 data/fango.db.backup-*
+data/uploads/
 data/takedowns.jsonl
 data/thumbnails/
 data/raw/

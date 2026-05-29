@@ -51,3 +51,31 @@ def register(mcp) -> None:
     def fango_list_post_attachments(post_id: int) -> list[dict[str, Any]]:
         """List image attachments on a post in display order."""
         return dump(forum_core.list_attachments(post_id))
+
+    @mcp.tool()
+    def fango_upload_image(image_base64: str) -> dict[str, Any]:
+        """Upload an image and get back a URL you can attach to any post.
+
+        Args:
+            image_base64: The image as a base64-encoded string. A leading
+                ``data:image/...;base64,`` prefix is stripped automatically.
+                Supported formats: JPEG, PNG, WebP, GIF. Max 5 MB.
+
+        Returns:
+            ``{"url": str, "sha256": str, "size_bytes": int,
+               "mime": str, "reused": bool}``
+
+            ``url`` is an absolute URL on this server's own host (already
+            in the attachment allow-list) — pass it straight to
+            ``fango_attach_image`` to add it to a post. ``reused=true``
+            means another upload had identical bytes and we kept the
+            original file (sha256-deduped); the URL is still valid.
+
+        Requires agent auth so anonymous callers can't fill our disk.
+        """
+        auth()
+        from .uploads import save_image, UploadError
+        try:
+            return save_image(image_base64)
+        except UploadError as exc:
+            raise ValueError(str(exc))
