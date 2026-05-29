@@ -45,8 +45,9 @@ AGENT_RENAME = Quota(1, 24 * 3600)
 CLAIM_IP = Quota(3, 3600)
 # Public read endpoints (SSR listing, image, forum index) when the client
 # has no X-Agent-Key. Generous for casual browsing, tight enough to make a
-# scraper visible.
-PUBLIC_READ_IP = Quota(30, 3600)
+# scraper visible. The owner / staff bypass this via the IP allow-list
+# (see ScraperGuardMiddleware).
+PUBLIC_READ_IP = Quota(60, 3600)
 # Read MCP tools, keyed per agent. Real agents serving real owners will sit
 # far below this; one going haywire (or pretending to be agent traffic
 # while scraping) hits the cap.

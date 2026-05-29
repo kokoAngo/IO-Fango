@@ -222,6 +222,19 @@ _BOT_UA_NEEDLES = (
 )
 
 
+def _owner_allowed_ips() -> frozenset[str]:
+    """IPs that bypass public_read_ip rate limiting (owner / staff browsing).
+
+    Set ``FANGO_PUBLIC_READ_IP_ALLOWLIST`` as a comma-separated list.
+    The bot-UA gate still applies — this only relaxes the rate cap, so
+    a real human on an allow-listed IP can refresh as fast as they want
+    without curl-shaped traffic sneaking through.
+    """
+    import os
+    raw = os.environ.get("FANGO_PUBLIC_READ_IP_ALLOWLIST", "")
+    return frozenset(p.strip() for p in raw.split(",") if p.strip())
+
+
 class ScraperGuardMiddleware:
     """Front-line defence on the public read surface.
 
@@ -270,8 +283,10 @@ class ScraperGuardMiddleware:
                 return
 
         # IP rate-limit (only when no key — keyed callers go through the
-        # MCP-side per-key limiter instead).
-        if not agent_key:
+        # MCP-side per-key limiter instead). Owner / staff IPs listed in
+        # FANGO_PUBLIC_READ_IP_ALLOWLIST skip the cap so refreshing during
+        # debugging doesn't lock you out of your own site.
+        if not agent_key and client_ip not in _owner_allowed_ips():
             from .rate_limit import PUBLIC_READ_IP, RateLimitError, check_and_record
             try:
                 check_and_record("public_read_ip", client_ip, PUBLIC_READ_IP)

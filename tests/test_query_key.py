@@ -67,15 +67,14 @@ def test_query_key_authenticates_on_mcp_path(client, agent_factory):
 def test_query_key_ignored_on_ssr_path(client, agent_factory, listing_factory):
     """SSR /listings/... must NOT honour ``?agent_key=...`` — query keys would
     leak into browser history and referrer headers."""
-    from fango.rate_limit import reset as reset_rl
+    from fango.rate_limit import reset as reset_rl, PUBLIC_READ_IP
     reset_rl()
     ag, key = agent_factory("QSAgent2")
     listing_factory()
-    # 31 calls — would exceed the 30/h public-read IP cap unless the key
-    # bypass kicks in. If query-string keys leaked into SSR auth, the
-    # 31st call would be 200. We want it to be 429.
+    # One past the public-read cap — would succeed only if the query key
+    # leaked into SSR auth. We want the cap to fire instead.
     ua = {"User-Agent": "Mozilla/5.0 (X11; Linux) Gecko/20100101 Firefox/120.0"}
-    for _ in range(30):
+    for _ in range(PUBLIC_READ_IP.limit):
         r = client.get(f"/listings/1?agent_key={key}", headers=ua)
         assert r.status_code == 200
     r = client.get(f"/listings/1?agent_key={key}", headers=ua)
