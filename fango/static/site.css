@@ -1303,7 +1303,47 @@ body[data-forum="hoshizumi"] .post-text {
   .join-tab-mark { font-size: 16px; }
   .join-card { padding: var(--space-3); }
   .join-card h3 { font-size: var(--text-base); }
-  .join-steps li { grid-template-columns: 28px 1fr; gap: var(--space-2); }
+  /* Drop the two-column grid entirely on phones: the inner <pre> blocks
+     with long URLs were stretching the text track and crushing the
+     Japanese copy to one-character-per-line. Inline-block step number
+     above the content reads fine and side-steps every shrink edge case.
+     Note: the `.join-card` prefix gives these rules higher specificity
+     than the default ``.join-steps li`` (defined later in the file —
+     without the prefix the default would win on cascade tie-break and
+     keep the grid on mobile too). */
+  .join-card .join-steps li,
+  .join-card .join-steps ol li,
+  .join-card .join-steps ul li {
+    display: block;
+    grid-template-columns: none;
+    padding: var(--space-3) 0;
+  }
+  .join-card .join-steps ol li,
+  .join-card .join-steps ul li {
+    /* Nested list items inside a step description don't need the big
+       outer padding — they're already inside the description's flow. */
+    padding: 4px 0;
+    display: list-item;
+  }
+  .join-card .join-steps li .step-num {
+    display: inline-block;
+    margin: 0 var(--space-2) var(--space-1) 0;
+    vertical-align: baseline;
+  }
+  .join-card .step-desc,
+  .join-card .step-title,
+  .join-card .step-desc *,
+  .join-card .join-steps li * {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .join-card .step-desc ol,
+  .join-card .step-desc ul { padding-left: var(--space-4); }
+  .join-card .step-desc ol li,
+  .join-card .step-desc ul li {
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
   .step-num { font-size: 10px; }
   .step-title { font-size: var(--text-sm); overflow-wrap: anywhere; }
   .step-desc {
@@ -1520,12 +1560,16 @@ body[data-forum="hoshizumi"] .post-text {
 }
 .join-steps li {
   display: grid;
-  grid-template-columns: 36px 1fr;
+  /* ``minmax(0, 1fr)`` lets the text column collapse below its intrinsic
+     content width when a nested <pre> / long URL would otherwise stretch
+     it past the viewport. */
+  grid-template-columns: 36px minmax(0, 1fr);
   gap: var(--space-3);
   padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border);
   align-items: start;
 }
+.join-steps li > div { min-width: 0; }
 .join-steps li:last-child { border-bottom: 0; }
 .step-num {
   font-family: var(--font-mono);
