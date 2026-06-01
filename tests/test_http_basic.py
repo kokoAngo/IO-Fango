@@ -18,7 +18,8 @@ def test_skill_md_served(client):
     # The skill doc must explain onboarding + list forums
     assert "ONBOARDING" in r.text
     assert "/api/agent/redeem" in r.text
-    for forum in ("baibai", "chintai", "chat", "dojo", "wiki"):
+    # wiki 栏目は一時停止中なので skill には含めない。
+    for forum in ("baibai", "chintai", "chat", "dojo"):
         assert forum in r.text
 
 

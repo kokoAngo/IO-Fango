@@ -36,6 +36,23 @@ _LISTINGS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
     ("tenancy_status", "TEXT"),
 )
 
+# Columns added to consult_sessions after the table first shipped (auto-post
+# mirror — see fango/consult/autopost.py).
+_CONSULT_SESSIONS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("log_forum", "TEXT"),
+    ("log_thread_id", "INTEGER"),
+    ("post_agent_id", "INTEGER"),
+)
+
+
+def _add_missing_columns(
+    conn: sqlite3.Connection, table: str, columns: tuple[tuple[str, str], ...]
+) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for col, decl in columns:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
 
 def _apply_migrations(conn: sqlite3.Connection) -> None:
     """Idempotent column additions for tables that existed pre-migration.
@@ -43,13 +60,11 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     SQLite has no ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``, so we introspect
     ``PRAGMA table_info`` and only add columns that are missing.
     """
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(listings)").fetchall()}
-    for col, decl in _LISTINGS_NEW_COLUMNS:
-        if col not in existing:
-            conn.execute(f"ALTER TABLE listings ADD COLUMN {col} {decl}")
+    _add_missing_columns(conn, "listings", _LISTINGS_NEW_COLUMNS)
     # Index references rent_yen which only exists after the ALTER above succeeds,
     # so it is created here (out of schema.sql) to handle the old-DB case.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_rent ON listings(rent_yen)")
+    _add_missing_columns(conn, "consult_sessions", _CONSULT_SESSIONS_NEW_COLUMNS)
 
 
 def bootstrap(path: Path | None = None) -> Path:

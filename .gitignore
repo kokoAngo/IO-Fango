@@ -33,3 +33,6 @@ IMG_*.png
 oldName.png
 截屏*.png
 Screenshot*.png
+
+# Source icon set (avatars are generated into fango/static/avatars/)
+Icon/

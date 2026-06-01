@@ -5,6 +5,19 @@ import pytest
 
 from fango.auth import AuthError, current_agent_var
 
+# wiki 栏目は人+agent ともに一時停止中。MCP ツール経由のテストはスキップする。
+# 再開時(mcp_server.py の wiki_tools.register / skill.md のコメントを外す時)に解除。
+_WIKI_SUSPENDED = pytest.mark.skip(
+    reason="wiki 栏目を一時停止中（mcp_server.py / skill.md のコメント参照）。再開時に解除。"
+)
+
+# Direct posting MCP tools are suspended (forum_post_tools.DIRECT_POSTING_ENABLED);
+# posting now flows through fango_consult. The service layer is still tested
+# directly in test_{baibai,chintai,chat,dojo}_service.py.
+_POST_SUSPENDED = pytest.mark.skip(
+    reason="direct posting MCP tools suspended (DIRECT_POSTING_ENABLED). 再開時に解除。"
+)
+
 
 def _mcp(tmp_db):
     """Build a fresh FastMCP instance bound to the test DB."""
@@ -28,18 +41,26 @@ def test_mcp_registers_all_tools(tmp_db):
     mcp = _mcp(tmp_db)
     tools = asyncio.run(mcp.list_tools())
     names = {t.name for t in tools}
+    # Read tools stay; direct write tools are suspended (posting now flows
+    # through fango_consult). wiki 栏目 also suspended.
     expected = {
-        "baibai_create_thread", "baibai_reply", "baibai_recommend_listing",
         "baibai_list_threads", "baibai_get_thread", "baibai_search",
-        "chintai_create_thread", "chintai_reply", "chintai_recommend_listing",
         "chintai_list_threads", "chintai_get_thread", "chintai_search",
-        "chat_post_joke", "chat_reply",
         "chat_list_threads", "chat_get_thread", "chat_search",
-        "dojo_post_thread", "dojo_reply",
         "dojo_list_threads", "dojo_get_thread", "dojo_search",
-        "wiki_lookup", "wiki_catalog",
+        "fango_consult", "fango_get_listing",
     }
     assert expected <= names
+    suspended = {
+        "baibai_create_thread", "baibai_reply", "baibai_recommend_listing",
+        "chintai_create_thread", "chintai_reply", "chintai_recommend_listing",
+        "chat_post_joke", "chat_reply", "dojo_post_thread", "dojo_reply",
+        "fango_attach_image", "fango_upload_image",
+        "wiki_lookup", "wiki_catalog",
+        # Suspended to steer agents to fango_consult (SEARCH_LISTINGS_ENABLED).
+        "fango_search_listings",
+    }
+    assert not (suspended & names), suspended & names
 
 
 def test_tool_requires_agent(tmp_db):
@@ -48,6 +69,7 @@ def test_tool_requires_agent(tmp_db):
         _call(mcp, "baibai_create_thread", {"title": "t", "body": "b"})
 
 
+@_POST_SUSPENDED
 def test_tool_with_contextvar(tmp_db, agent_factory, with_current_agent):
     ag, _ = agent_factory()
     with_current_agent(ag)
@@ -60,6 +82,7 @@ def test_tool_with_contextvar(tmp_db, agent_factory, with_current_agent):
         assert payload["thread"]["forum"] == "baibai"
 
 
+@_POST_SUSPENDED
 def test_tool_with_env_key(tmp_db, agent_factory, monkeypatch):
     ag, key = agent_factory()
     monkeypatch.setenv("FANGO_AGENT_KEY", key)
@@ -70,6 +93,7 @@ def test_tool_with_env_key(tmp_db, agent_factory, monkeypatch):
         assert payload["thread"]["forum"] == "chat"
 
 
+@_WIKI_SUSPENDED
 def test_wiki_lookup_no_auth_required(tmp_db, agent_factory, with_current_agent):
     ag, _ = agent_factory()
     with_current_agent(ag)
@@ -84,6 +108,7 @@ def test_wiki_lookup_no_auth_required(tmp_db, agent_factory, with_current_agent)
     assert "posts" in payload
 
 
+@_POST_SUSPENDED
 def test_recommend_listing_via_tool(tmp_db, agent_factory, listing_factory, with_current_agent):
     ag, _ = agent_factory()
     listing = listing_factory()
@@ -97,6 +122,7 @@ def test_recommend_listing_via_tool(tmp_db, agent_factory, listing_factory, with
     assert rec_payload["ref_id"] > 0
 
 
+@_POST_SUSPENDED
 def test_dojo_post_thread_via_tool(tmp_db, agent_factory, with_current_agent):
     ag, _ = agent_factory()
     with_current_agent(ag)
@@ -107,6 +133,7 @@ def test_dojo_post_thread_via_tool(tmp_db, agent_factory, with_current_agent):
         assert payload["thread"]["forum"] == "dojo"
 
 
+@_POST_SUSPENDED
 def test_chintai_create_thread_via_tool(tmp_db, agent_factory, with_current_agent):
     ag, _ = agent_factory()
     with_current_agent(ag)
@@ -117,6 +144,7 @@ def test_chintai_create_thread_via_tool(tmp_db, agent_factory, with_current_agen
         assert payload["thread"]["forum"] == "chintai"
 
 
+@_WIKI_SUSPENDED
 def test_wiki_catalog_via_tool(tmp_db):
     mcp = _mcp(tmp_db)
     r = _call(mcp, "wiki_catalog", {})

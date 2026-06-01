@@ -51,6 +51,20 @@ def _record_mcp_call(tool_name: str) -> None:
         log.debug("mcp call event publish failed: %s", exc)
 
 
+def _record_activity(tool_name: str, kwargs: dict) -> None:
+    """Append a human-readable activity-stream line for this tool call.
+
+    Captures the calling agent (if any) and the call kwargs. Best-effort — the
+    activity layer must never fail a tool call.
+    """
+    try:
+        from .auth import current_agent_var
+        from . import activity
+        activity.record(tool_name, current_agent_var.get(), kwargs)
+    except Exception as exc:  # pragma: no cover
+        log.debug("activity record failed: %s", exc)
+
+
 def _instrument(mcp: FastMCP) -> None:
     """Wrap ``mcp.tool()`` so every registered function records a call event.
 
@@ -67,6 +81,9 @@ def _instrument(mcp: FastMCP) -> None:
             @functools.wraps(fn)
             def wrapped(*a, **kw):
                 _record_mcp_call(fn.__name__)
+                # エージェント実況 stream retired — per-forum live feeds replace it.
+                # Re-enable by uncommenting (also restore /activity + nav/widget).
+                # _record_activity(fn.__name__, kw)
                 return fn(*a, **kw)
             return decorator(wrapped)
 
@@ -100,7 +117,8 @@ def build_mcp(name: str = "fango.io") -> FastMCP:
     chintai_tools.register(mcp)
     chat_tools.register(mcp)
     dojo_tools.register(mcp)
-    wiki_tools.register(mcp)
+    # 一時停止: wiki 栏目(人+agent 共に停止)。再開時はこの行のコメントを外す。
+    # wiki_tools.register(mcp)
     listings_tools.register(mcp)
     saved_search_tools.register(mcp)
     consult_tool.register(mcp)

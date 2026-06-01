@@ -9,7 +9,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="/static/site.css">
+  {% set asset_v = asset_version() if asset_version is callable else asset_version %}
+  <link rel="stylesheet" href="/static/site.css?v={{ asset_v }}">
   <script>
     /* First-visit redirect to the Matrix intro page (-1).
        Only triggers at root; deep-links bypass it. Set sessionStorage to skip. */
@@ -36,7 +37,7 @@
     })();
   </script>
   <script src="/static/vendor/htmx.min.js" defer></script>
-  <script src="/static/site.js" defer></script>
+  <script src="/static/site.js?v={{ asset_v }}" defer></script>
 </head>
 <body data-forum="{{ active_forum or 'fangobook' }}">
   {% include "partials/icons.html" %}

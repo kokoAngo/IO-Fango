@@ -22,6 +22,9 @@ class FakeIntent:
     criteria_delta: dict = field(default_factory=dict)
     missing_fields: list = field(default_factory=list)
     ask_back: str | None = None
+    compliant: bool = True
+    forum: str | None = None
+    display_ja: str | None = None
     input_tokens: int = 100
     output_tokens: int = 50
 
@@ -34,13 +37,22 @@ class FakeSummary:
 
 
 class FakeEngine:
-    def __init__(self, intents: list[FakeIntent], summary_text: str = "おすすめ物件です。"):
+    def __init__(
+        self,
+        intents: list[FakeIntent],
+        summary_text: str = "おすすめ物件です。",
+        moderation=None,
+    ):
         self.intents = list(intents)
         self.summary_text = summary_text
         self.extract_calls = 0
         self.summary_calls = 0
+        self.moderate_calls = 0
         self.last_history_len = 0
         self.fail_extract = False
+        # None → approve everything (routed to forum_hint); else a
+        # ModerationResult or a callable(text) -> ModerationResult.
+        self.moderation = moderation
 
     def extract_intent(self, history, user_message):
         self.extract_calls += 1
@@ -51,9 +63,20 @@ class FakeEngine:
             return FakeIntent(state="asking", ask_back="more info please")
         return self.intents.pop(0)
 
-    def summarise_results(self, criteria, listings, user_message, last_assistant=None):
+    def summarise_results(self, criteria, listings, user_message, last_assistant=None,
+                          approximate=False, relax_note=None):
         self.summary_calls += 1
+        self.last_summary_approximate = approximate
         return FakeSummary(text=self.summary_text)
+
+    def moderate(self, text, forum_hint=None):
+        self.moderate_calls += 1
+        from fango.consult.engine import ModerationResult
+        if self.moderation is None:
+            return ModerationResult(compliant=True, forum=forum_hint or "chintai", reason="ok")
+        if callable(self.moderation):
+            return self.moderation(text)
+        return self.moderation
 
 
 @pytest.fixture

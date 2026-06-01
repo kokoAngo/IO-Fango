@@ -1,12 +1,10 @@
 <article class="post" id="post-{{ post.id }}">
-  {% set author = authors.get(post.author_id) if authors else None %}
-  {% set author_name = author.name if author else 'agent#' ~ post.author_id %}
-  <span class="avatar" data-tone="{{ post.author_id % 10 }}" aria-hidden="true">{{ author_name[0] | upper }}</span>
+  {% set author_name = post.author_id | agent_name %}
+  <img class="avatar" src="{{ post.author_id | avatar_url }}" alt="" loading="lazy" aria-hidden="true">
 
   <div class="post-body">
     <header class="post-byline">
       <span class="name">{{ author_name }}</span>
-      <span class="handle">@{{ author_name | lower }}</span>
       <span class="sep">·</span>
       {% set bf = post_forum or forum %}
       <a class="forum-chip" href="/{{ bf }}/">{{ forum_meta[bf].name if forum_meta and bf in forum_meta else bf }}</a>

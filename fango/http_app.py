@@ -13,9 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
 
+from . import activity
 from . import FORUM_META, FORUM_NAMES_JP, FORUMS
 from .auth import (
     AuthError,
+    client_ip_var,
     create_agent,
     current_agent_var,
     lookup_by_key,
@@ -53,6 +55,25 @@ _VALID_IMAGE_KINDS = {"raw", "processed", "shuhen"}
 
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 register_filters(templates.env)
+
+
+def _asset_version() -> str:
+    """Cache-busting token for /static assets — the newest mtime of the JS/CSS
+    we control. Recomputed per render (a couple of stat() calls) so editing
+    site.js alone refreshes the token without a server restart, and a browser
+    never serves a stale copy after a deploy."""
+    newest = 0.0
+    for name in ("site.js", "site.css"):
+        try:
+            newest = max(newest, (STATIC_DIR / name).stat().st_mtime)
+        except OSError:
+            pass
+    return str(int(newest))
+
+
+# Exposed to every template as ``{{ asset_version() }}`` (see base.html) —
+# registered as a callable so it re-stats on each render.
+templates.env.globals["asset_version"] = _asset_version
 
 FORUM_SERVICES = {
     "baibai":    bb,
@@ -104,6 +125,8 @@ def shared_ctx(request: Request, *, active_forum: str | None = None,
         "current_agent": current_agent_var.get(),
         "trending_tags": _trending_tags(),
         "hot_listings": _hot_listings(),
+        # エージェント実況 retired — per-forum live feeds replace it.
+        # "recent_activity": activity.recent(limit=6),
         "site_stats": _site_stats(),
     }
 
@@ -159,11 +182,13 @@ class AgentKeyMiddleware:
         if key:
             agent = lookup_by_key(key)
             token = current_agent_var.set(agent)
+        ip_token = client_ip_var.set(_scope_client_ip(scope))
         try:
             await self.app(scope, receive, send)
         finally:
             if token is not None:
                 current_agent_var.reset(token)
+            client_ip_var.reset(ip_token)
 
 
 class McpHostAllowlistMiddleware:
@@ -417,6 +442,16 @@ def _register_routes(app: FastAPI) -> None:
         })
         return templates.TemplateResponse(request, "home.html", ctx)
 
+    # エージェント実況 stream retired in favour of per-forum live feeds.
+    # To restore: uncomment this route, `recent_activity` in shared_ctx, the
+    # nav item + right-rail widget, and `_record_activity` in mcp_server.py.
+    # @app.get("/activity", response_class=HTMLResponse)
+    # async def activity_feed(request: Request):
+    #     """Public feed of "which agent did what" — one line per MCP tool call."""
+    #     ctx = shared_ctx(request, active_nav="activity")
+    #     ctx.update({"activity": activity.recent(limit=100)})
+    #     return templates.TemplateResponse(request, "activity.html", ctx)
+
     @app.get("/fangobook/real-estate-search-skill.md", response_class=PlainTextResponse)
     async def skill_md(request: Request):
         # Render via jinja so {{ base_url }} reflects however the agent reached us.
@@ -544,17 +579,17 @@ def _register_routes(app: FastAPI) -> None:
         return FileResponse(str(abs_path), media_type="image/jpeg")
 
     # ----------------------- Heatmap ---------------------------------------
-
-    @app.get("/heatmap", response_class=HTMLResponse)
-    async def heatmap(request: Request):
-        from .jpmap import VIEW_W, VIEW_H
-        prefectures, ranking = _heatmap_data()
-        ctx = shared_ctx(request, active_nav="heatmap")
-        ctx.update({
-            "prefectures": prefectures, "ranking": ranking,
-            "map_view_w": VIEW_W, "map_view_h": VIEW_H,
-        })
-        return templates.TemplateResponse(request, "heatmap.html", ctx)
+    # 一時停止: 分布図(/heatmap)。栏目を再開する時はこのルートのコメントを外す。
+    # @app.get("/heatmap", response_class=HTMLResponse)
+    # async def heatmap(request: Request):
+    #     from .jpmap import VIEW_W, VIEW_H
+    #     prefectures, ranking = _heatmap_data()
+    #     ctx = shared_ctx(request, active_nav="heatmap")
+    #     ctx.update({
+    #         "prefectures": prefectures, "ranking": ranking,
+    #         "map_view_w": VIEW_W, "map_view_h": VIEW_H,
+    #     })
+    #     return templates.TemplateResponse(request, "heatmap.html", ctx)
 
     # ----------------------- Claim / Redeem (human-mediated) ---------------
     # Must be registered BEFORE the generic /{forum}/ route or the path
@@ -618,8 +653,9 @@ def _register_routes(app: FastAPI) -> None:
 
     @app.get("/{forum}/", response_class=HTMLResponse)
     async def forum_index(forum: str, request: Request, q: Optional[str] = None):
-        if forum == "wiki":
-            return await wiki_index(request, q)
+        # 一時停止: wiki 栏目。再開する時はこの 2 行のコメントを外す。
+        # if forum == "wiki":
+        #     return await wiki_index(request, q)
         svc = _service_or_404(forum)
         threads = svc.list_threads()
         recent = _recent_posts_in_forum(forum)
@@ -1098,6 +1134,17 @@ def _client_ip(request: Request) -> str:
     if fwd:
         return fwd.split(",")[0].strip()
     return request.client.host if request.client else "0.0.0.0"
+
+
+def _scope_client_ip(scope) -> str | None:
+    """Best-effort client IP from a raw ASGI scope (for the agent-key middleware)."""
+    for k, v in scope.get("headers", ()):
+        if k == b"x-forwarded-for" and v:
+            return v.decode("latin-1").split(",")[0].strip()
+    client = scope.get("client")
+    if client:
+        return client[0]
+    return None
 
 
 async def _read_json(request: Request) -> dict:

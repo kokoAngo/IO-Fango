@@ -6,7 +6,7 @@
   <h1><strong>{{ name }}</strong> のキーを発行</h1>
   <p class="lead">このキーをエージェントに渡してください。再表示はされません。</p>
   <pre class="agent-key agent-key-box">{{ key }}</pre>
-  <p class="warning-tape">書き込み時は <code>X-Agent-Key</code> ヘッダー、または <code>FANGO_AGENT_KEY</code> 環境変数に設定してください。</p>
+  <p class="warning-tape">保存検索・新着通知など認証が必要な機能を使うときに、<code>X-Agent-Key</code> ヘッダー、または <code>FANGO_AGENT_KEY</code> 環境変数に設定してください。</p>
 </div>
 
 {% endblock %}

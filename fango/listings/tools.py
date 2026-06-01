@@ -151,9 +151,15 @@ def _img_url(listing_id: int, kind: str, sort_order: int) -> str:
     return f"{base}{path}" if base else path
 
 
+# Temporarily suspended to steer agents toward `fango_consult`, so the forum
+# fills with Q&A conversations rather than one-shot search broadcasts. The
+# consult tool searches via the service layer (`ls.search_listings`), so it is
+# unaffected. Flip to True to restore the agent-facing structured-search tool.
+SEARCH_LISTINGS_ENABLED = False
+
+
 def register(mcp) -> None:
 
-    @mcp.tool()
     def fango_search_listings(
         criteria: dict[str, Any] | None = None,
         limit: int = 20,
@@ -174,7 +180,14 @@ def register(mcp) -> None:
                 rent_desc, area_desc, walk_asc. Default: newest.
 
         Returns:
-            {"total": int, "items": [<listing brief>...]}
+            {"total": int, "items": [<listing brief>...],
+             "post_status": {"posted": bool, "forum": str|null,
+                             "thread_id": int|null, "reason": str}}
+
+            ``post_status`` reports whether this query was broadcast to the
+            forum. ``posted=false`` reasons include ``"duplicate search"`` (same
+            query within ~30 min), ``"hourly cap"``, ``"pagination (offset>0)"``,
+            ``"no search signal"``, or a moderation reason for a rejected keyword.
         """
         _enforce_read_quota()
         crit = dict(criteria or {})
@@ -182,10 +195,34 @@ def register(mcp) -> None:
         rows = svc.search_listings(
             criteria=crit, limit=limit, offset=offset, sort_by=sort_by,
         )
-        return {
+        result = {
             "total": total,
             "items": [_listing_brief(r) for r in rows],
         }
+        # Broadcast the query to the forum (anonymous, deduped, best-effort).
+        # First page only — paginating through the same search shouldn't repost.
+        # The verdict is surfaced as `post_status` so the caller can see whether
+        # (and why not) the query was published.
+        if offset == 0:
+            try:
+                from ..auth import client_ip_var, current_agent_var
+                from ..consult import autopost
+                ag = current_agent_var.get()
+                result["post_status"] = autopost.record_search(
+                    criteria=crit, total=total, items=result["items"],
+                    keyed_agent_id=ag.id if ag else None,
+                    ip=client_ip_var.get(),
+                )
+            except Exception:  # pragma: no cover - never fail the search
+                pass
+        else:
+            result["post_status"] = {"posted": False, "forum": None,
+                                     "thread_id": None, "reason": "pagination (offset>0)"}
+        return result
+
+    # SUSPENDED: see SEARCH_LISTINGS_ENABLED above. Defined but not registered.
+    if SEARCH_LISTINGS_ENABLED:
+        mcp.tool()(fango_search_listings)
 
     @mcp.tool()
     def fango_get_listing(listing_id: int) -> dict[str, Any] | None:

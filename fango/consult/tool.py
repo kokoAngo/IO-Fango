@@ -9,11 +9,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..auth import current_agent_var
+from ..auth import client_ip_var, current_agent_var
 from ..config import load_consult_settings
 from ..db import connect
+from ..rate_limit import RateLimitError, enforce_consult_ip
 from ..listings import service as ls
 from ..listings.tools import _listing_brief
+from . import autopost as _autopost
 from . import engine as _engine
 from . import session as _ss
 
@@ -61,6 +63,16 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
 
     conn = connect()
     try:
+        # Keyless callers can now post (anonymously, moderated), so throttle them
+        # per source IP to stop an anonymous flood. Keyed agents bypass this.
+        if agent is None:
+            ip = client_ip_var.get()
+            if ip:
+                try:
+                    enforce_consult_ip(ip, conn=conn)
+                except RateLimitError:
+                    return _rate_limited_envelope(session_id)
+
         sess = _resolve_session(conn, session_id, agent_id, settings.session_ttl_seconds)
 
         # Hard cap on turns — drain into 'done' state.
@@ -94,6 +106,8 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
                 criteria_delta={},
                 missing_fields=[],
                 ask_back=_prompts.FALLBACK_ASKBACK,
+                # No verdict available → fail closed (don't publish this turn).
+                compliant=False,
             )
 
         # Merge delta into the running criteria.
@@ -113,12 +127,23 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             except Exception as exc:  # pragma: no cover
                 log.exception("search_listings failed: %s", exc)
                 rows = []
-            briefs = [_listing_brief(r, conn=conn) for r in rows]
             total = ls.count_listings(criteria=merged, conn=conn)
+            # No exact match → offer near options by progressively loosening the
+            # criteria, rather than replying "nothing found".
+            approximate = False
+            relax_note = None
+            if not rows:
+                try:
+                    rows, relax_note = ls.relaxed_search(merged, limit=10, conn=conn)
+                    approximate = bool(rows)
+                except Exception as exc:  # pragma: no cover
+                    log.warning("relaxed_search failed: %s", exc)
+            briefs = [_listing_brief(r, conn=conn) for r in rows]
             last_assistant = _last_assistant_text(history_for_llm)
             try:
                 summary = engine.summarise_results(
                     merged, briefs, message, last_assistant=last_assistant,
+                    approximate=approximate, relax_note=relax_note,
                 )
                 reply = summary.text
                 usage_in += summary.input_tokens
@@ -127,7 +152,9 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
                 log.warning("engine.summarise_results raised: %s", exc)
                 from . import prompts as _prompts
                 reply = _prompts.FALLBACK_SUMMARY
-            results_payload = {"total": total, "items": briefs}
+            results_payload = {"total": total, "items": briefs, "approximate": approximate}
+            if relax_note:
+                results_payload["relax_note"] = relax_note
         else:
             reply = intent.ask_back or "もう少し情報を教えてください。"
 
@@ -163,6 +190,26 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
                 conn=conn,
             )
 
+        # Moderate this turn and, if cleared, publish it as a forum thread/reply
+        # under the caller's anonymous identity (best-effort; never fails the
+        # consult call). ``sess`` still holds the pre-turn log_thread_id, so the
+        # first turn creates the thread and later turns append replies.
+        post_status = _autopost.record_turn(
+            session=sess,
+            # Publish the question in Japanese (the agent may have asked in
+            # another language); fall back to the raw message.
+            user_message=intent.display_ja or message,
+            reply=reply,
+            state=state,
+            criteria=merged,
+            results=results_payload,
+            keyed_agent_id=agent_id,
+            ip=client_ip_var.get(),
+            compliant=intent.compliant,
+            forum_class=intent.forum,
+            conn=conn,
+        )
+
         return _envelope(
             sess,
             reply=reply, state=state,
@@ -171,6 +218,7 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             suggested=_suggest_next(state, results_payload, agent_id is not None),
             usage_in=usage_in, usage_out=usage_out,
             turn_override=sess.total_turns + 1,
+            post_status=post_status,
         )
     finally:
         conn.close()
@@ -214,6 +262,21 @@ def _suggest_next(state: str, results: dict | None, has_agent: bool) -> list[str
     return out
 
 
+def _rate_limited_envelope(session_id: str | None) -> dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "reply": "リクエストが多すぎます。少し時間をおいてから、もう一度お試しください。",
+        "state": "done",
+        "criteria_extracted": {},
+        "results": None,
+        "suggested_next_tools": [],
+        "turn": 0,
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+        "post_status": {"posted": False, "forum": None, "thread_id": None,
+                        "reason": "rate limited"},
+    }
+
+
 def _done_reply(max_turns: int) -> str:
     return (
         f"このセッションは {max_turns} ターンの上限に達しました。"
@@ -232,6 +295,7 @@ def _envelope(
     usage_out: int,
     criteria: dict[str, Any] | None = None,
     turn_override: int | None = None,
+    post_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "session_id": sess.id,
@@ -242,4 +306,7 @@ def _envelope(
         "suggested_next_tools": suggested,
         "turn": turn_override if turn_override is not None else sess.total_turns,
         "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
+        # Whether this turn was published to a forum, and why not if held back.
+        "post_status": post_status or {"posted": False, "forum": None,
+                                       "thread_id": None, "reason": ""},
     }

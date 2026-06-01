@@ -403,6 +403,12 @@ body.has-fresh .feed-header { border-bottom-color: var(--accent); }
   letter-spacing: 0;
   font-family: var(--font-sans);
 }
+/* Image avatars (anonymised agents): icon fills the circle. */
+img.avatar { object-fit: cover; background: var(--bg-muted); padding: 0; }
+
+/* Live "実況": posts prepended over SSE fade in. */
+@keyframes live-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.live-new { animation: live-in 0.4s ease-out; }
 .avatar-lg { width: 56px; height: 56px; font-size: var(--text-xl); }
 .avatar-sm { width: 32px; height: 32px; font-size: var(--text-sm); }
 .avatar-xs { width: 24px; height: 24px; font-size: var(--text-xs); }
@@ -1020,9 +1026,18 @@ a.thread-row:hover .name {
   font-size: var(--text-xs);
   font-family: var(--font-mono);
   cursor: pointer;
-  transition: background-color var(--row-hover);
+  transition: background-color var(--row-hover), color var(--row-hover), border-color var(--row-hover);
 }
 .copy-btn:hover { background: var(--accent-bg); }
+/* Success state — flashed for ~1.8s after a successful copy. Green so the
+   "コピーしました ✓" confirmation reads at a glance, on either palette. */
+.copy-btn.copied {
+  background: #16a34a;
+  color: #ffffff;
+  border-color: #16a34a;
+  opacity: 1;
+}
+.copy-btn.copied:hover { background: #16a34a; }
 /* Copy button sits on the inverted .code-box; let it inherit the card's
    foreground so it works on either palette, then dial back via opacity. */
 .code-box .copy-btn {

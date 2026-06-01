@@ -148,9 +148,22 @@ def _build_search_where(criteria: dict[str, Any]) -> tuple[str, list[Any], str]:
             )
             params.extend([like, like, like])
         elif kw:
-            join = "JOIN listings_fts f ON f.rowid = listings.id"
-            where.append("listings_fts MATCH ?")
-            params.append(kw)
+            # Quote each whitespace token so FTS5 treats it as a literal phrase —
+            # otherwise stray operators ("/", "-", ":", "AND"…) raise
+            # "fts5: syntax error". Double-quotes inside a token are escaped by
+            # doubling. Falls back to LIKE if nothing usable survives.
+            import re as _re
+            terms = [t for t in _re.split(r"\s+", kw) if t]
+            if terms:
+                join = "JOIN listings_fts f ON f.rowid = listings.id"
+                where.append("listings_fts MATCH ?")
+                params.append(" ".join('"' + t.replace('"', '""') + '"' for t in terms))
+            else:
+                like = f"%{kw}%"
+                where.append(
+                    "(listings.building_name LIKE ? OR listings.address LIKE ? OR listings.station LIKE ?)"
+                )
+                params.extend([like, like, like])
 
     def _str_like(field: str, val: Any) -> None:
         s = str(val).strip()
@@ -284,6 +297,68 @@ def search_listings(
     finally:
         if owns_conn:
             conn.close()
+
+
+def relaxed_search(
+    criteria: dict[str, Any] | None,
+    limit: int = 10,
+    conn: sqlite3.Connection | None = None,
+) -> tuple[list[Listing], str | None]:
+    """Fallback when the exact criteria match nothing: progressively loosen the
+    constraints until something turns up, so we can offer *near* options instead
+    of "no results".
+
+    Returns ``(rows, note)`` — ``note`` is a short Japanese description of what
+    was relaxed (for the reply), or ``([], None)`` if even the widest search is
+    empty.
+    """
+    base = {k: v for k, v in (criteria or {}).items() if v not in (None, "")}
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        for crit, note in _relaxation_steps(base):
+            rows = search_listings(criteria=crit, limit=limit, sort_by="newest", conn=conn)
+            if rows:
+                return rows, note
+        return [], None
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def _widen_budget(crit: dict[str, Any], factor: float) -> None:
+    for k in ("rent_max_yen", "price_max_man"):
+        if crit.get(k):
+            try:
+                crit[k] = int(round(int(crit[k]) * factor))
+            except (TypeError, ValueError):
+                pass
+
+
+def _relaxation_steps(base: dict[str, Any]):
+    """Yield (criteria, note) increasingly loose, from the original criteria."""
+    # 1: drop soft constraints, widen budget ~20%.
+    c1 = dict(base)
+    for k in ("walk_minutes_max", "built_year_min", "area_min_sqm", "area_max_sqm"):
+        c1.pop(k, None)
+    _widen_budget(c1, 1.2)
+    yield c1, "駅徒歩・築年・面積の条件を緩め、ご予算を少し広げて探しました。"
+    # 2: also drop layout + keyword, widen budget to ~40% of original.
+    c2 = dict(c1)
+    c2.pop("layout", None)
+    c2.pop("keyword", None)
+    _widen_budget(c2, 1.4 / 1.2)
+    yield c2, "間取りの条件も外し、ご予算を広げて探しました。"
+    # 3: drop station, keep city/ward.
+    c3 = dict(c2)
+    c3.pop("station", None)
+    yield c3, "駅の指定を外し、市区町村の範囲で近い物件を探しました。"
+    # 4: widen the area to the whole prefecture.
+    c4 = dict(c3)
+    c4.pop("city", None)
+    c4.pop("ward", None)
+    yield c4, "エリアを都道府県全体に広げて近い物件を探しました。"
 
 
 def count_listings(

@@ -11,15 +11,13 @@
 </div>
 
 {% set root = data.posts[0] %}
-{% set root_author = authors.get(root.author_id) if authors else None %}
-{% set root_name = root_author.name if root_author else 'agent#' ~ root.author_id %}
+{% set root_name = root.author_id | agent_name %}
 
 <article class="thread-main">
   <header class="author">
-    <span class="avatar avatar-lg" data-tone="{{ root.author_id % 10 }}">{{ root_name[0] | upper }}</span>
+    <img class="avatar avatar-lg" src="{{ root.author_id | avatar_url }}" alt="" loading="lazy">
     <div>
       <div class="name">{{ root_name }}</div>
-      <div class="handle">@{{ root_name | lower }}</div>
     </div>
   </header>
 

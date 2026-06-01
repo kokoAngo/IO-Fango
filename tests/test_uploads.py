@@ -132,6 +132,11 @@ class TestValidation:
             uploads.save_image(base64.b64encode(svg).decode())
 
 
+@pytest.mark.skip(
+    reason="fango_upload_image MCP tool suspended "
+           "(forum_post_tools.DIRECT_POSTING_ENABLED). save_image logic stays "
+           "covered by TestServeEndpoint + the service tests."
+)
 class TestMcpTool:
     def test_requires_auth(self, isolated_uploads, tmp_db):
         from fango.auth import AuthError

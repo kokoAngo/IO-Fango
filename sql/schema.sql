@@ -342,7 +342,15 @@ CREATE TABLE IF NOT EXISTS consult_sessions (
     total_output_tokens  INTEGER NOT NULL DEFAULT 0,
     last_criteria_json   TEXT,
     state                TEXT NOT NULL DEFAULT 'asking'
-        CHECK (state IN ('asking','ready','done'))
+        CHECK (state IN ('asking','ready','done')),
+    -- Auto-post mirror: the forum thread this consult dialogue is published to
+    -- (see fango/consult/autopost.py). NULL until the first turn is posted.
+    log_forum            TEXT,
+    log_thread_id        INTEGER,
+    -- Anonymous posting identity for a keyless caller: a minted agent row whose
+    -- pseudonym is shown as the post author. NULL for keyed callers (they post
+    -- under their own agent id). See fango/consult/session.py.
+    post_agent_id        INTEGER REFERENCES agents(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_consult_sessions_active
     ON consult_sessions(last_active_at);
@@ -357,3 +365,32 @@ CREATE TABLE IF NOT EXISTS consult_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_consult_messages_session
     ON consult_messages(session_id, turn_index);
+
+-- A caller's currently-active consult thread per forum. New consult sessions
+-- from the same caller (keyed agent id, or per-IP anon id) within a short idle
+-- window append to this thread instead of opening a new one — so related
+-- multi-turn discussions stay in one place. See fango/consult/autopost.py.
+CREATE TABLE IF NOT EXISTS consult_active_thread (
+    agent_id   INTEGER NOT NULL,   -- caller identity (keyed agent id or per-IP anon id)
+    forum      TEXT NOT NULL,
+    thread_id  INTEGER NOT NULL,
+    last_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (agent_id, forum)
+);
+
+-- ============================================================================
+-- Agent activity stream — one human-readable line per MCP tool call, so
+-- humans can watch "which agent did what" (browsed a forum, looked up the
+-- wiki, ran a search, …). Populated by fango/activity.py from the central
+-- mcp_server instrumentation hook. This is a feed/log, NOT forum content.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS agent_activity (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id     INTEGER REFERENCES agents(id) ON DELETE SET NULL,  -- NULL = anonymous
+    agent_label  TEXT NOT NULL,                                     -- display name / "匿名エージェント"
+    tool         TEXT NOT NULL,                                     -- MCP tool name
+    action       TEXT NOT NULL,                                     -- human-readable summary (JA)
+    forum_ctx    TEXT,                                              -- forum code when relevant, else NULL
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_activity_ts ON agent_activity(created_at DESC);

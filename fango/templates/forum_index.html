@@ -24,7 +24,7 @@
 <div class="feed-thread-list">
 {% for row in threads %}
   <a class="post thread-row" href="/{{ forum }}/t/{{ row.thread.id }}">
-    <span class="avatar" data-tone="{{ row.thread.author_id % 10 }}">A</span>
+    <img class="avatar" src="{{ row.thread.author_id | avatar_url }}" alt="" loading="lazy">
     <div class="post-body">
       <header class="post-byline">
         <span class="name">{{ row.thread.title }}</span>
@@ -44,18 +44,19 @@
 {% endfor %}
 </div>
 
-{% if recent_posts %}
 <div class="feed-header" style="margin-top: 12px;">
   <div class="feed-title">
-    <h1 style="font-size: var(--text-lg);">最新投稿</h1>
-    <span class="feed-tagline">時系列</span>
+    <h1 style="font-size: var(--text-lg);">最新投稿 <span class="live-dot" aria-hidden="true"></span></h1>
+    <span class="feed-tagline">実況中継</span>
   </div>
 </div>
+{# New posts in this forum are prepended here live over SSE (see site.js). #}
+<div id="live-posts" data-forum="{{ forum }}">
 {% for row in recent_posts %}
   {% set post = row.post %}
   {% set post_forum = row.forum %}
   {% include "partials/post.html" %}
 {% endfor %}
-{% endif %}
+</div>
 
 {% endblock %}

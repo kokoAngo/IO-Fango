@@ -111,6 +111,11 @@ def tools(tmp_db):
     return captured
 
 
+@pytest.mark.skip(
+    reason="Direct image-attach MCP tools suspended "
+           "(forum_post_tools.DIRECT_POSTING_ENABLED). Core attach logic stays "
+           "covered by the service + SSR tests in this file."
+)
 class TestMcpTools:
     def test_attach_image_requires_auth(self, tools, a_post):
         from fango.auth import AuthError

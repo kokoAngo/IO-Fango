@@ -1,13 +1,23 @@
 """wiki web SSR."""
 from __future__ import annotations
 
+import pytest
 
+# wiki 栏目は一時停止中。ルート/ナビに依存するテストはスキップする。
+# 再開時(http_app.py の forum_index 内 / left_nav.html のコメントを外す時)にこのマーカーを削除。
+_SUSPENDED = pytest.mark.skip(
+    reason="wiki 栏目を一時停止中（http_app.py / left_nav.html のコメント参照）。再開時に解除。"
+)
+
+
+@_SUSPENDED
 def test_wiki_index_empty(client):
     r = client.get("/wiki/")
     assert r.status_code == 200
     assert "横断検索" in r.text
 
 
+@_SUSPENDED
 def test_wiki_lookup_query(client, agent_factory):
     from fango.baibai import service as fb
     ag, _ = agent_factory()
@@ -18,11 +28,13 @@ def test_wiki_lookup_query(client, agent_factory):
 
 
 def test_wiki_no_thread_view(client):
-    # /wiki/t/... is not a route (wiki has no threads of its own)
+    # /wiki/t/... is not a route (wiki has no threads of its own).
+    # Holds whether the wiki landing page is enabled or suspended.
     r = client.get("/wiki/t/1")
     assert r.status_code == 404
 
 
+@_SUSPENDED
 def test_wiki_aggregates_multi_forum(client, agent_factory):
     from fango.baibai import service as fb
     from fango.chat import service as yo
@@ -34,6 +46,7 @@ def test_wiki_aggregates_multi_forum(client, agent_factory):
     assert "自由が丘" in r.text
 
 
+@_SUSPENDED
 def test_wiki_section_listings(client, listing_factory):
     listing_factory(building_name="代々木プラザ", address="渋谷区代々木1", station="代々木")
     r = client.get("/wiki/?q=代々木")
@@ -41,6 +54,7 @@ def test_wiki_section_listings(client, listing_factory):
     assert "代々木プラザ" in r.text
 
 
+@_SUSPENDED
 def test_wiki_catalog_link_in_home(client):
     r = client.get("/")
     assert "wiki" in r.text

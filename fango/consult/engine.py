@@ -40,6 +40,13 @@ class IntentResult:
     criteria_delta: dict[str, Any] = field(default_factory=dict)
     missing_fields: list[str] = field(default_factory=list)
     ask_back: str | None = None
+    # Folded-in moderation verdict (so consult needs only one LLM call, not a
+    # separate moderate() round-trip): may this turn be published, and where.
+    compliant: bool = True
+    forum: str | None = None
+    # The user's message rephrased in natural Japanese for forum display (posts
+    # should read as Japanese even when the agent asked in another language).
+    display_ja: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -49,6 +56,27 @@ class SummaryResult:
     text: str
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+_FORUMS = ("baibai", "chintai", "chat", "dojo")
+
+
+@dataclass
+class ModerationResult:
+    """Verdict on whether a candidate post may be published, and where.
+
+    ``forum`` is the routing target (one of the four forum codes) or ``None``
+    when the content fits nowhere / is rejected.
+    """
+    compliant: bool
+    forum: str | None
+    reason: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def approved(self) -> bool:
+        return bool(self.compliant) and self.forum in _FORUMS
 
 
 class Engine(Protocol):
@@ -68,7 +96,15 @@ class Engine(Protocol):
         listings: list[dict[str, Any]],
         user_message: str,
         last_assistant: str | None = None,
+        approximate: bool = False,
+        relax_note: str | None = None,
     ) -> SummaryResult: ...
+
+    def moderate(
+        self,
+        text: str,
+        forum_hint: str | None = None,
+    ) -> ModerationResult: ...
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +176,14 @@ class GeminiEngine:
         listings: list[dict[str, Any]],
         user_message: str,
         last_assistant: str | None = None,
+        approximate: bool = False,
+        relax_note: str | None = None,
     ) -> SummaryResult:
         if self._degraded:
-            return SummaryResult(text=_degraded_summary(listings))
+            return SummaryResult(text=_degraded_summary(listings, approximate, relax_note))
         prompt = prompts.render_summary_prompt(
             criteria, listings, user_message, last_assistant_message=last_assistant,
+            approximate=approximate, relax_note=relax_note,
         )
         try:
             from google.genai import types  # type: ignore
@@ -152,7 +191,7 @@ class GeminiEngine:
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    system_instruction=prompts.SYSTEM_PROMPT,
+                    system_instruction=prompts.SUMMARY_SYSTEM_PROMPT,
                     temperature=0.4,
                 ),
             )
@@ -166,6 +205,35 @@ class GeminiEngine:
             input_tokens=_get_usage(usage, "prompt_token_count"),
             output_tokens=_get_usage(usage, "candidates_token_count"),
         )
+
+    def moderate(
+        self,
+        text: str,
+        forum_hint: str | None = None,
+    ) -> ModerationResult:
+        if self._degraded:
+            return _degraded_moderate(forum_hint)
+        contents = [
+            {"role": "user", "parts": [{"text": prompts.render_moderation_input(text, forum_hint)}]}
+        ]
+        try:
+            from google.genai import types  # type: ignore
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=prompts.MODERATION_PROMPT,
+                    response_mime_type="application/json",
+                    response_schema=prompts.MODERATION_SCHEMA,
+                    temperature=0.1,
+                ),
+            )
+            raw = response.text or ""
+            usage = response.usage_metadata
+        except Exception as exc:
+            log.warning("moderate LLM call failed: %s", exc)
+            return _degraded_moderate(forum_hint)
+        return _parse_moderation(raw, usage, forum_hint)
 
 
 # ---------------------------------------------------------------------------
@@ -241,11 +309,78 @@ def _parse_intent(raw_text: str, usage: Any) -> IntentResult:
     ask_back = parsed.get("ask_back")
     if state == "asking" and not ask_back:
         ask_back = prompts.FALLBACK_ASKBACK
+    # Folded moderation verdict. Absent → treat as compliant (the LLM processed
+    # it); the degraded/error path below is the one that fails closed.
+    compliant = parsed.get("compliant")
+    compliant = True if compliant is None else bool(compliant)
+    forum = parsed.get("forum")
+    if forum not in _FORUMS:
+        forum = None
+    display_ja = parsed.get("display_ja")
+    display_ja = str(display_ja).strip() if display_ja else None
     return IntentResult(
         state=state,
         criteria_delta=delta,
         missing_fields=[str(x) for x in missing],
         ask_back=ask_back if state == "asking" else None,
+        compliant=compliant,
+        forum=forum,
+        display_ja=display_ja,
+        input_tokens=_get_usage(usage, "prompt_token_count"),
+        output_tokens=_get_usage(usage, "candidates_token_count"),
+    )
+
+
+def _loads_tolerant(raw_text: str) -> dict | None:
+    """Parse a JSON object, tolerating ```json fences``` Gemini sometimes adds."""
+    if not raw_text:
+        return None
+    text = raw_text.strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        m = _JSON_FENCE_RE.search(text)
+        if not m:
+            return None
+        try:
+            parsed = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _moderation_fail_open() -> bool:
+    """When moderation is unavailable, post anyway? Default false (fail-closed)."""
+    return os.environ.get("FANGO_MODERATION_FAIL_OPEN", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _degraded_moderate(forum_hint: str | None) -> ModerationResult:
+    """No LLM available. Fail-closed by default; fail-open only if configured."""
+    if _moderation_fail_open():
+        return ModerationResult(
+            compliant=True,
+            forum=forum_hint if forum_hint in _FORUMS else "chintai",
+            reason="moderation skipped (fail-open)",
+        )
+    return ModerationResult(
+        compliant=False, forum=None, reason=prompts.FALLBACK_MODERATION_REASON,
+    )
+
+
+def _parse_moderation(raw_text: str, usage: Any, forum_hint: str | None) -> ModerationResult:
+    parsed = _loads_tolerant(raw_text)
+    if parsed is None:
+        log.warning("moderation parse failed; raw=%r", (raw_text or "")[:200])
+        return _degraded_moderate(forum_hint)
+    forum = parsed.get("forum")
+    if forum not in _FORUMS:
+        forum = None
+    return ModerationResult(
+        compliant=bool(parsed.get("compliant")),
+        forum=forum,
+        reason=str(parsed.get("reason") or ""),
         input_tokens=_get_usage(usage, "prompt_token_count"),
         output_tokens=_get_usage(usage, "candidates_token_count"),
     )
@@ -283,13 +418,21 @@ def _degraded_extract(user_message: str) -> IntentResult:
         criteria_delta=delta,
         missing_fields=["prefecture", "layout", "rent_max_yen"],
         ask_back=prompts.FALLBACK_ASKBACK,
+        # No LLM → no moderation verdict: fail closed (don't publish) unless the
+        # operator opted into fail-open.
+        compliant=_moderation_fail_open(),
     )
 
 
-def _degraded_summary(listings: list[dict[str, Any]]) -> str:
+def _degraded_summary(listings: list[dict[str, Any]], approximate: bool = False,
+                      relax_note: str | None = None) -> str:
     if not listings:
         return prompts.FALLBACK_SUMMARY + "（該当物件が見つかりませんでした）"
-    parts = ["以下の物件が条件に合いそうです:"]
+    if approximate:
+        head = "ご希望に完全一致する物件はありませんでしたが、近い条件で以下が見つかりました:"
+        parts = [head] + ([relax_note] if relax_note else [])
+    else:
+        parts = ["以下の物件が条件に合いそうです:"]
     for L in listings[:3]:
         rent = L.get("rent_yen")
         rent_str = f"月額 {rent:,} 円" if rent else "賃料未公開"

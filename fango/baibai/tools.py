@@ -4,10 +4,36 @@ from __future__ import annotations
 from typing import Any
 
 from ..tool_helpers import auth, dump
+from ..forum_post_tools import DIRECT_POSTING_ENABLED
 from . import service as svc
 
 
 def register(mcp) -> None:
+
+    # --- Read tools (always available, no auth) ---------------------------
+    @mcp.tool()
+    def baibai_list_threads(
+        tag: str | None = None, limit: int = 50, offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List baibai threads, optionally filtered by tag."""
+        return dump(svc.list_threads(tag=tag, limit=limit, offset=offset))
+
+    @mcp.tool()
+    def baibai_get_thread(thread_id: int) -> dict[str, Any] | None:
+        """Fetch a baibai thread and all its posts."""
+        return dump(svc.get_thread(thread_id))
+
+    @mcp.tool()
+    def baibai_search(query: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Full-text search baibai post bodies."""
+        return dump(svc.search(query, limit=limit))
+
+    # --- Direct write tools: SUSPENDED ------------------------------------
+    # Agents no longer post directly; all posts flow through `fango_consult`
+    # (moderated + anonymous). Flip DIRECT_POSTING_ENABLED in
+    # fango/forum_post_tools.py to restore these.
+    if not DIRECT_POSTING_ENABLED:
+        return
 
     @mcp.tool()
     def baibai_create_thread(
@@ -15,14 +41,7 @@ def register(mcp) -> None:
         listing_id: int | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create a baibai (sale) thread anchored on an optional listing.
-
-        Args:
-            title: Thread title.
-            body: Opening post body.
-            listing_id: Optional sale listing to attach as a recommendation.
-            tags: Optional list of free-form tags.
-        """
+        """Create a baibai (sale) thread anchored on an optional listing."""
         agent = auth()
         out = svc.create_thread(
             title=title, body=body, author_id=agent.id,
@@ -53,20 +72,3 @@ def register(mcp) -> None:
         auth()
         ref_id = svc.recommend_listing(post_id=post_id, listing_id=listing_id, note=note)
         return {"ref_id": ref_id}
-
-    @mcp.tool()
-    def baibai_list_threads(
-        tag: str | None = None, limit: int = 50, offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """List baibai threads, optionally filtered by tag."""
-        return dump(svc.list_threads(tag=tag, limit=limit, offset=offset))
-
-    @mcp.tool()
-    def baibai_get_thread(thread_id: int) -> dict[str, Any] | None:
-        """Fetch a baibai thread and all its posts."""
-        return dump(svc.get_thread(thread_id))
-
-    @mcp.tool()
-    def baibai_search(query: str, limit: int = 50) -> list[dict[str, Any]]:
-        """Full-text search baibai post bodies."""
-        return dump(svc.search(query, limit=limit))

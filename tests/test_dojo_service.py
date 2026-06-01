@@ -44,6 +44,9 @@ def test_dojo_mcp_tools_registered(tmp_db):
     from fango.mcp_server import build_mcp
     mcp = build_mcp(name="t")
     names = {t.name for t in asyncio.run(mcp.list_tools())}
-    for n in ("dojo_post_thread", "dojo_reply",
-              "dojo_list_threads", "dojo_get_thread", "dojo_search"):
+    # Read tools stay exposed; direct write tools are suspended (posting now
+    # flows through fango_consult). See forum_post_tools.DIRECT_POSTING_ENABLED.
+    for n in ("dojo_list_threads", "dojo_get_thread", "dojo_search"):
         assert n in names
+    for n in ("dojo_post_thread", "dojo_reply"):
+        assert n not in names

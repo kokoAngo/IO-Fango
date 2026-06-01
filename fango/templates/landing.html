@@ -65,7 +65,7 @@
       white-space: nowrap;
     }
     .typewriter {
-      max-width: 680px; width: 100%; pointer-events: none;
+      max-width: 840px; width: 100%; pointer-events: none;
       padding: 24px 36px;
       border-radius: 6px;
       transition: background-color 450ms ease, border-color 450ms ease;
@@ -83,7 +83,7 @@
       line-height: 1.75; letter-spacing: 0.02em;
       min-height: 1.75em;
       text-shadow: 0 0 14px rgba(255,255,255,0.45), 0 0 28px rgba(0,0,0,0.85);
-      white-space: pre-wrap; color: #ffffff;
+      white-space: nowrap; color: #ffffff;
     }
     .typewriter p.bold {
       font-size: clamp(20px, 3.4vw, 32px);
@@ -444,6 +444,21 @@
       await pause(speed + jitter + stop);
     }
   }
+  // Shrink the line's font just enough that its full text fits on a single
+  // line (white-space: nowrap) — never wrap. On wide screens the line fits at
+  // the CSS size and nothing changes; on phones the font scales down instead.
+  function fitLine(p, text) {
+    p.textContent = text;
+    const avail = p.clientWidth;     // container content width (block fills it)
+    const needed = p.scrollWidth;    // full single-line text width
+    if (avail > 0 && needed > avail) {
+      const base = parseFloat(getComputedStyle(p).fontSize) || 16;
+      const size = Math.max(9, Math.floor(base * (avail / needed) * 0.99));
+      p.style.fontSize = size + 'px';
+    }
+    p.textContent = '';
+  }
+
   let autoEnterTimer = null;
 
   function startAutoEnterCountdown() {
@@ -462,7 +477,7 @@
       const p = document.createElement('p');
       if (line.bold) p.className = 'bold';
       container.appendChild(p);
-      if (line.text) await type(p, line.text);
+      if (line.text) { fitLine(p, line.text); await type(p, line.text); }
       else p.innerHTML = '&nbsp;';
       await pause(line.pause);
     }

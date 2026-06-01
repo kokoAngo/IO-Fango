@@ -75,6 +75,9 @@ def test_chintai_mcp_tools_registered(tmp_db):
     from fango.mcp_server import build_mcp
     mcp = build_mcp(name="t")
     names = {t.name for t in asyncio.run(mcp.list_tools())}
-    for n in ("chintai_create_thread", "chintai_reply", "chintai_recommend_listing",
-              "chintai_list_threads", "chintai_get_thread", "chintai_search"):
+    # Read tools stay exposed; direct write tools are suspended (posting now
+    # flows through fango_consult). See forum_post_tools.DIRECT_POSTING_ENABLED.
+    for n in ("chintai_list_threads", "chintai_get_thread", "chintai_search"):
         assert n in names
+    for n in ("chintai_create_thread", "chintai_reply", "chintai_recommend_listing"):
+        assert n not in names

@@ -1,7 +1,16 @@
 """Prefecture heatmap page."""
 from __future__ import annotations
 
+import pytest
 
+# 分布図(/heatmap)栏目は一時停止中。ルート/ナビに依存するテストはスキップする。
+# 再開時(http_app.py / left_nav.html のコメントを外す時)にこのマーカーを削除。
+_SUSPENDED = pytest.mark.skip(
+    reason="分布図 栏目を一時停止中（http_app.py / left_nav.html のコメント参照）。再開時に解除。"
+)
+
+
+@_SUSPENDED
 def test_heatmap_empty(client):
     r = client.get("/heatmap")
     assert r.status_code == 200
@@ -9,6 +18,7 @@ def test_heatmap_empty(client):
     assert "47" in r.text  # subtitle mentions 47 prefectures
 
 
+@_SUSPENDED
 def test_heatmap_polygons_for_seeded_listings(client, listing_factory):
     listing_factory(prefecture="東京都", building_name="A")
     listing_factory(prefecture="東京都", building_name="B")
@@ -22,11 +32,13 @@ def test_heatmap_polygons_for_seeded_listings(client, listing_factory):
     assert 'data-pref="東京都"' in r.text
 
 
+@_SUSPENDED
 def test_heatmap_links_in_nav(client):
     r = client.get("/")
     assert "/heatmap" in r.text
 
 
+@_SUSPENDED
 def test_heatmap_svg_present(client, listing_factory):
     listing_factory(prefecture="北海道")
     r = client.get("/heatmap")
@@ -37,6 +49,7 @@ def test_heatmap_svg_present(client, listing_factory):
 
 
 def test_heatmap_module_renders_47_prefectures():
+    # 純モジュールテスト — ルート停止の影響を受けないので維持。
     from fango.jpmap import get_prefecture_paths
     paths = get_prefecture_paths()
     assert len(paths) == 47

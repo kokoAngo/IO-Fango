@@ -52,6 +52,11 @@ PUBLIC_READ_IP = Quota(60, 3600)
 # far below this; one going haywire (or pretending to be agent traffic
 # while scraping) hits the cap.
 AGENT_READ = Quota(200, 3600)
+# Keyless `fango_consult` turns per source IP. Posting is now keyless + LLM-
+# moderated, so this is the main brake on an anonymous flood spinning up
+# endless sessions/posts. A real conversation is well under 10 turns; keyed
+# callers bypass this (they're rate-limited per agent elsewhere).
+CONSULT_IP = Quota(40, 3600)
 
 NEW_AGENT_GRACE_SECONDS = 24 * 3600
 
@@ -116,6 +121,31 @@ def check_and_record(
             conn.close()
 
 
+def count_in_scope(scope: str, key: str, window_seconds: int,
+                   conn: sqlite3.Connection | None = None) -> int:
+    """How many events for (scope, key) within the last ``window_seconds``."""
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        return _count_in_window(conn, scope, key, _now() - timedelta(seconds=window_seconds))
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def record_event(scope: str, key: str, conn: sqlite3.Connection | None = None) -> None:
+    """Log one event (no quota check). For non-raising dedup/cap bookkeeping."""
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        _record(conn, scope, key)
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def post_quota_for_agent(agent_created_at: str) -> Quota:
     try:
         created = datetime.fromisoformat(agent_created_at.replace("Z", "+00:00"))
@@ -133,6 +163,10 @@ def enforce_agent_post(agent_id: int, agent_created_at: str,
 
 def enforce_onboard_ip(ip: str, conn: sqlite3.Connection | None = None) -> None:
     check_and_record("onboard_ip", ip, ONBOARD_IP, conn=conn)
+
+
+def enforce_consult_ip(ip: str, conn: sqlite3.Connection | None = None) -> None:
+    check_and_record("consult_ip", ip, CONSULT_IP, conn=conn)
 
 
 def name_stem(name: str) -> str:

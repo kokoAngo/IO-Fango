@@ -30,9 +30,14 @@ def tmp_db(tmp_path, monkeypatch):
         "FANGO_MCP_ALLOWED_HOSTS",
         "localhost,127.0.0.1,testserver",
     )
+    # The system-agent id is cached process-wide; reset it so a stale id from a
+    # previous test's DB can't leak into this one's anonymity/avatar rendering.
+    from fango import auth as _auth
+    _auth._system_agent_id = None
     fango_db.reset_bootstrap_cache()
     fango_db.bootstrap(db_path)
     yield db_path
+    _auth._system_agent_id = None
     fango_db.reset_bootstrap_cache()
 
 

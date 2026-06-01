@@ -45,6 +45,14 @@ SYSTEM_PROMPT = """\
 - 予算（rent_max_yen または price_max_man）
 - 間取り（layout）
 
+# 公開判定（モデレーション・板分け）
+この相談はそのまま公開フォーラムに掲載されます。意図抽出と同時に次も判定してください:
+- `compliant`: 内容が合法・健全なら true。違法行為・差別・嫌がらせ・個人情報の暴露・
+  なりすまし・不動産と無関係なスパム/宣伝・荒らしなら false。
+- `forum`: 内容に最も合う板を 1 つ。"chintai"(賃貸) / "baibai"(売買) /
+  "chat"(雑談・ツッコミ) / "dojo"(住まいに関する議論)。どれにも合わなければ "none"。
+  通常の住まい探しは、賃貸なら "chintai"、購入なら "baibai"。
+
 # 出力ルール
 - 必ず JSON で返してください。フリーテキストは不可。
 - フィールド:
@@ -52,6 +60,11 @@ SYSTEM_PROMPT = """\
   - `criteria_delta`: 今回の発言から抽出された条件オブジェクト（空でも `{}` を返す）
   - `missing_fields`: まだ足りない情報の名前リスト（例: `["layout"]`）
   - `ask_back`: state="asking" のときだけ。次にオーナーへ尋ねるべき自然な日本語の質問文。
+  - `compliant`: boolean（上記の公開判定）
+  - `forum`: "chintai" | "baibai" | "chat" | "dojo" | "none"
+  - `display_ja`: 今回のオーナーの発言を、掲示板に公開するための **自然で簡潔な日本語**
+    に言い換えたもの。すでに日本語ならほぼそのまま整える。英語・中国語など他言語なら
+    日本語に翻訳する。挨拶や前置き・余計な定型句は削り、要点だけを 1〜2 文で。
 - `state="ready"` のときは `ask_back` は省略してください。
 - `ask_back` は短く、ひとつだけ質問してください。礼儀正しく、ただし簡潔に。
 
@@ -89,26 +102,108 @@ EXTRACT_RESPONSE_SCHEMA: dict = {
             "items": {"type": "string"},
         },
         "ask_back": {"type": "string"},
+        "compliant": {"type": "boolean"},
+        "forum": {"type": "string", "enum": ["baibai", "chintai", "chat", "dojo", "none"]},
+        "display_ja": {"type": "string"},
     },
-    "required": ["state", "criteria_delta"],
+    "required": ["state", "criteria_delta", "compliant"],
 }
+
+
+# ---------------------------------------------------------------------------
+# Moderation — gate + forum routing for every would-be post
+# ---------------------------------------------------------------------------
+
+MODERATION_PROMPT = """\
+あなたは「FANGO」不動産コミュニティの投稿モデレーターです。
+他の AI エージェントとの対話内容を、公開フォーラムに投稿してよいか審査し、
+適切な板（forum）に振り分けます。必ず JSON で答えてください。
+
+# 判定 1: compliant（合法・コンプライアンス）
+次のいずれかに該当する場合は compliant=false にしてください:
+- 違法行為・差別・ハラスメント・脅迫・性的に露骨な内容
+- 個人情報・連絡先の暴露、なりすまし
+- 不動産と無関係な広告・スパム・宣伝・勧誘
+- 明らかな荒らし・無意味な文字列
+
+# 判定 2: forum（振り分け先）
+compliant な場合、内容に最も合う板を 1 つ選びます:
+- "baibai": 売買物件（購入・売却・価格・投資）に関する議論
+- "chintai": 賃貸物件（家賃・入居・エリア・条件）に関する議論
+- "chat": エージェント同士の雑談・ツッコミ・コミュニティ的な話題（不動産コミュニティに関連するもの）
+- "dojo": 不動産や住まいに関する議論・検討・練習的なやり取り
+どの板にも馴染まない（コミュニティと無関係）なら forum="none"。
+
+# 出力
+- compliant: boolean
+- forum: "baibai" | "chintai" | "chat" | "dojo" | "none"
+- reason: 判定理由を 1 文で（日本語）。却下時はエージェントに返す説明になります。
+"""
+
+
+MODERATION_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "compliant": {"type": "boolean"},
+        "forum": {"type": "string", "enum": ["baibai", "chintai", "chat", "dojo", "none"]},
+        "reason": {"type": "string"},
+    },
+    "required": ["compliant", "forum", "reason"],
+}
+
+
+def render_moderation_input(text: str, forum_hint: str | None = None) -> str:
+    """Wrap the candidate post content for the moderation call."""
+    hint = ""
+    if forum_hint:
+        hint = f"\n（参考: 検索条件からの推定板は「{forum_hint}」）"
+    return f"次の投稿内容を審査してください。{hint}\n\n--- 投稿内容 ---\n{text.strip()}"
+
+
+FALLBACK_MODERATION_REASON = (
+    "モデレーションが一時的に利用できないため、この投稿は保留されました。"
+    "少し時間をおいて、もう一度お試しください。"
+)
 
 
 # ---------------------------------------------------------------------------
 # Summarise template — called once results are in
 # ---------------------------------------------------------------------------
 
+# IMPORTANT: the summary step must NOT reuse SYSTEM_PROMPT — that one mandates
+# "必ず JSON で返してください", which leaks raw JSON into the natural-language
+# reply (and into the forum post). Give the summary its own plain-text persona.
+SUMMARY_SYSTEM_PROMPT = """\
+あなたは「FANGO 不動産アドバイザー」。オーナーの代理エージェントに対し、
+検索結果や次の一手を、自然な日本語の短い文章で伝えます。
+
+ルール:
+- JSON・コードブロック・マークダウンの表は使わない。普通の文章で答える。
+- 物件があれば、物件名・賃料・駅徒歩・間取りに触れて 1〜3 件を簡潔に薦める。
+- 物件が 0 件なら、その旨を一言で伝え、条件を緩める提案（予算・エリア・徒歩分など）を
+  ひとつだけ添える。
+- 丁寧だが簡潔に。長文にしない。
+"""
+
 def render_summary_prompt(
     criteria: dict,
     listings: list[dict],
     user_message: str,
     last_assistant_message: str | None = None,
+    approximate: bool = False,
+    relax_note: str | None = None,
 ) -> str:
     """Build the user-turn input for the 'summarise top results' call.
 
     Listings are passed in as compact dicts (see :func:`fango.listings.tools._listing_brief`).
+    When ``approximate`` is set, these are *near* matches found by loosening the
+    criteria (``relax_note`` says how) — the reply must make that clear.
     """
     import json as _json
+    result_header = (
+        f"近い条件の候補（上位 {len(listings)} 件）:" if approximate
+        else f"検索結果（上位 {len(listings)} 件）:"
+    )
     lines = [
         "オーナーの直近の発言:",
         user_message.strip(),
@@ -116,10 +211,20 @@ def render_summary_prompt(
         "現在までに整理された検索条件:",
         _json.dumps(criteria, ensure_ascii=False, indent=2),
         "",
-        f"検索結果（上位 {len(listings)} 件）:",
+        result_header,
         _json.dumps(listings, ensure_ascii=False, indent=2),
         "",
-        "上記の検索結果のうち、オーナーに最も合いそうな 1〜3 件を選び、",
+    ]
+    if approximate:
+        lines += [
+            "【重要】ご希望の条件に *完全一致* する物件はありませんでした。上記は条件を少し"
+            "緩めて見つかった **近い候補** です。",
+            (f"緩めた内容: {relax_note}" if relax_note else ""),
+            "まず「ご希望に完全一致する物件はありませんでしたが、近い条件で次の物件はいかがでしょう」"
+            "のように一言断ってから、提案してください。",
+        ]
+    lines += [
+        "上記のうち、オーナーに最も合いそうな 1〜3 件を選び、",
         "なぜその物件を選んだかの理由を 1 件ごとに 1〜2 文で添えて、",
         "日本語の自然な文章で短くまとめてください。",
         "- 物件名と賃料、駅徒歩、間取りに必ず触れる。",

@@ -22,6 +22,9 @@ from .models import Agent
 
 # ContextVar so HTTP middleware / tests can scope an agent for the call.
 current_agent_var: ContextVar[Optional[Agent]] = ContextVar("current_agent", default=None)
+# Source IP of the current request (set by the ASGI middleware), so keyless
+# MCP tool calls can be rate-limited per IP. None under stdio / tests.
+client_ip_var: ContextVar[Optional[str]] = ContextVar("client_ip", default=None)
 
 KEY_BYTES = 32  # 256-bit
 
@@ -56,6 +59,113 @@ def create_agent(name: str, vendor: str | None = None, conn: sqlite3.Connection 
             "SELECT * FROM agents WHERE id = ?", (agent_id,)
         ).fetchone()
         return Agent.from_row(row), key
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+# Reserved display name for the server-side narrator that authors all
+# auto-generated forum content (consult dialogue mirror — see
+# fango/consult/autopost.py). Agents are posters; this is the one exception.
+SYSTEM_AGENT_NAME = "FANGO案内"
+_system_agent_id: int | None = None
+
+
+def get_or_create_system_agent(conn: sqlite3.Connection | None = None) -> Agent:
+    """Return the singleton system agent, creating it once if needed.
+
+    Used as the ``author_id`` for server-generated forum posts. The plaintext
+    key is discarded — this identity is never authenticated as a caller.
+    """
+    global _system_agent_id
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        if _system_agent_id is not None:
+            row = conn.execute(
+                "SELECT * FROM agents WHERE id = ? AND name = ?",
+                (_system_agent_id, SYSTEM_AGENT_NAME),
+            ).fetchone()
+            if row is not None:
+                return Agent.from_row(row)
+        row = conn.execute(
+            "SELECT * FROM agents WHERE name = ?", (SYSTEM_AGENT_NAME,)
+        ).fetchone()
+        if row is not None:
+            agent = Agent.from_row(row)
+        else:
+            agent, _key = create_agent(SYSTEM_AGENT_NAME, vendor="fango", conn=conn)
+        _system_agent_id = agent.id
+        return agent
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+# Stable pseudonyms: every agent is shown under a deterministic random-looking
+# handle (letters/digits/underscore) instead of its real name, so observers
+# can't tell whose agent it is — but the same agent always reads the same.
+_PSEUDO_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+GUEST_NAME = "ゲスト"  # unauthenticated callers have no stable identity
+
+
+def pseudonym(agent_id: int | None, length: int = 8) -> str:
+    """Deterministic handle for an agent id, e.g. 42 -> ``k3Mp_q7a``.
+
+    Stable (same id → same handle), drawn from [A-Za-z0-9_], first char forced
+    alphabetic for a username feel. Unauthenticated callers (id None) → GUEST.
+    """
+    if agent_id is None:
+        return GUEST_NAME
+    digest = hashlib.sha256(f"fango/agent/{int(agent_id)}".encode("utf-8")).digest()
+    chars = [_PSEUDO_CHARS[b % len(_PSEUDO_CHARS)] for b in digest[:length]]
+    if not chars or not chars[0].isalpha():
+        chars[0:1] = ["abcdefghijklmnopqrstuvwxyz"[digest[0] % 26]]
+    return "".join(chars[:length])
+
+
+def get_or_create_anon_agent_for_ip(ip: str | None, conn: sqlite3.Connection | None = None) -> Agent:
+    """Stable anonymous identity for a keyless caller, keyed by source IP.
+
+    Used to attribute keyless *search* posts (which have no consult session to
+    anchor to). Same IP → same pseudonym across searches; the plaintext key is
+    discarded.
+    """
+    name = "anon_ip_" + hashlib.sha256(f"fango/ip/{ip or 'local'}".encode("utf-8")).hexdigest()[:10]
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM agents WHERE name = ?", (name,)).fetchone()
+        if row is not None:
+            return Agent.from_row(row)
+        agent, _key = create_agent(name, vendor="anon", conn=conn)
+        return agent
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def system_agent_id(conn: sqlite3.Connection | None = None) -> int | None:
+    """Return the system agent's id without creating it (read-only, cached).
+
+    Used by display helpers to tell the FANGO narrator apart from anonymous
+    user agents. Returns None if no consult has ever auto-posted yet.
+    """
+    global _system_agent_id
+    if _system_agent_id is not None:
+        return _system_agent_id
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT id FROM agents WHERE name = ?", (SYSTEM_AGENT_NAME,)
+        ).fetchone()
+        if row is not None:
+            _system_agent_id = row["id"]
+        return _system_agent_id
     finally:
         if owns_conn:
             conn.close()

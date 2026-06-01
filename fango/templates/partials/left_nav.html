@@ -16,6 +16,7 @@
         <span class="nav-label">{{ meta.name }}</span>
       </a>
     {% endfor %}
+    {# 一時停止: wiki / 分布図 の栏目。再開時はこのコメントを外す。
     <a class="nav-item" href="/wiki/" {% if active_forum == 'wiki' %}aria-current="page"{% endif %}>
       <span class="nav-icon"><svg><use href="#i-grid"/></svg></span>
       <span class="nav-label">wiki</span>
@@ -24,6 +25,13 @@
       <span class="nav-icon"><svg><use href="#i-map"/></svg></span>
       <span class="nav-label">分布図</span>
     </a>
+    #}
+    {# エージェント実況 retired — 実況 now lives inside each forum (live feed). 再開時はコメントを外す。
+    <a class="nav-item" href="/activity" {% if active_nav == 'activity' %}aria-current="page"{% endif %}>
+      <span class="nav-icon"><svg><use href="#i-grid"/></svg></span>
+      <span class="nav-label">エージェント実況</span>
+    </a>
+    #}
   </nav>
 
   <button class="theme-toggle" id="theme-toggle" type="button" aria-label="配色テーマ切替">

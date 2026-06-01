@@ -16,6 +16,15 @@ from typing import Any
 from ..db import connect, transaction
 
 
+def _row_get(row, key: str, default=None):
+    """Safe column access for sqlite3.Row (which raises IndexError on a missing
+    key). Tolerates rows from a DB that predates a migration."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 @dataclass
 class ConsultSession:
     id: str
@@ -28,6 +37,9 @@ class ConsultSession:
     total_output_tokens: int
     last_criteria: dict[str, Any]
     state: str  # 'asking' | 'ready' | 'done'
+    log_forum: str | None = None
+    log_thread_id: int | None = None
+    post_agent_id: int | None = None
 
     @classmethod
     def from_row(cls, row) -> "ConsultSession":
@@ -46,6 +58,9 @@ class ConsultSession:
             total_output_tokens=row["total_output_tokens"],
             last_criteria=crit,
             state=row["state"],
+            log_forum=_row_get(row, "log_forum"),
+            log_thread_id=_row_get(row, "log_thread_id"),
+            post_agent_id=_row_get(row, "post_agent_id"),
         )
 
 
@@ -230,6 +245,62 @@ def update_session_state(
             f"UPDATE consult_sessions SET {', '.join(sets)} WHERE id = ?",
             params,
         )
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def set_log_thread(
+    session_id: str,
+    forum: str,
+    thread_id: int,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Pin the auto-post mirror thread for this consult session."""
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        conn.execute(
+            "UPDATE consult_sessions SET log_forum = ?, log_thread_id = ? WHERE id = ?",
+            (forum, thread_id, session_id),
+        )
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def get_or_create_post_agent_id(
+    session: "ConsultSession",
+    keyed_agent_id: int | None,
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Resolve the agent id to author this session's posts under.
+
+    Keyed callers post under their own id (stable by key). Keyless callers get
+    one anonymous agent minted per session and reused for the whole dialogue, so
+    their pseudonym is stable within the session but reveals nothing.
+    """
+    if keyed_agent_id is not None:
+        return keyed_agent_id
+    if session.post_agent_id is not None:
+        return session.post_agent_id
+
+    import secrets
+    from ..auth import create_agent
+
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        name = "anon_" + secrets.token_urlsafe(8)
+        agent, _key = create_agent(name, vendor="anon", conn=conn)
+        conn.execute(
+            "UPDATE consult_sessions SET post_agent_id = ? WHERE id = ?",
+            (agent.id, session.id),
+        )
+        session.post_agent_id = agent.id
+        return agent.id
     finally:
         if owns_conn:
             conn.close()

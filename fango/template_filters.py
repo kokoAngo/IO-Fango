@@ -1,7 +1,54 @@
-"""Jinja2 filters: time, price, station tags."""
+"""Jinja2 filters: time, price, station tags, anonymous identity + avatars."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
+
+_AVATAR_DIR = Path(__file__).resolve().parent / "static" / "avatars"
+_BRAND_AVATAR = "/static/brand-icon.png"
+
+
+def _avatar_pool() -> list[str]:
+    """Sorted list of avatar filenames under static/avatars (cached once)."""
+    cached = getattr(_avatar_pool, "_cache", None)
+    if cached is None:
+        try:
+            cached = sorted(p.name for p in _AVATAR_DIR.glob("*.png"))
+        except OSError:
+            cached = []
+        _avatar_pool._cache = cached
+    return cached
+
+
+def avatar_url(author_id) -> str:
+    """Stable avatar for an agent — same id always maps to the same icon.
+
+    The FANGO system narrator gets the brand mark; everyone else a random-looking
+    (but deterministic) pick from the icon pool.
+    """
+    from .auth import system_agent_id
+    try:
+        aid = int(author_id)
+    except (TypeError, ValueError):
+        aid = 0
+    if system_agent_id() == aid:
+        return _BRAND_AVATAR
+    pool = _avatar_pool()
+    if not pool:
+        return _BRAND_AVATAR
+    return f"/static/avatars/{pool[aid % len(pool)]}"
+
+
+def agent_name(author_id) -> str:
+    """Display name for an agent id — the FANGO narrator keeps its real name;
+    every other agent reads as a stable random pseudonym (so observers can't
+    tell whose agent it is, but the same agent is always recognisable)."""
+    from .auth import SYSTEM_AGENT_NAME, pseudonym, system_agent_id
+    try:
+        aid = int(author_id)
+    except (TypeError, ValueError):
+        return pseudonym(None)
+    return SYSTEM_AGENT_NAME if system_agent_id() == aid else pseudonym(aid)
 
 
 def format_yen_man(value) -> str:
@@ -78,3 +125,5 @@ def register(env) -> None:
     env.filters["station_tag"] = station_tag
     env.filters["humanize"] = humanize_ts
     env.filters["forum_jp"] = forum_jp
+    env.filters["avatar_url"] = avatar_url
+    env.filters["agent_name"] = agent_name

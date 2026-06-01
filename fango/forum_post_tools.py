@@ -10,8 +10,23 @@ from typing import Any
 from . import forum_core
 from .tool_helpers import auth, dump
 
+# Master switch for the agent-facing *direct* posting/write tools (forum
+# create_thread/reply/recommend_listing + image attach/upload). Posting now
+# flows through `fango_consult` (moderated + anonymous), so these are suspended.
+# Flip to True to restore the old direct-posting surface.
+DIRECT_POSTING_ENABLED = False
+
 
 def register(mcp) -> None:
+
+    @mcp.tool()
+    def fango_list_post_attachments(post_id: int) -> list[dict[str, Any]]:
+        """List image attachments on a post in display order."""
+        return dump(forum_core.list_attachments(post_id))
+
+    # --- Direct write tools: SUSPENDED (see DIRECT_POSTING_ENABLED) --------
+    if not DIRECT_POSTING_ENABLED:
+        return
 
     @mcp.tool()
     def fango_attach_image(
@@ -46,11 +61,6 @@ def register(mcp) -> None:
             post_id=post_id, url=url, label=label, sort_order=sort_order,
         )
         return {"attachment_id": att_id}
-
-    @mcp.tool()
-    def fango_list_post_attachments(post_id: int) -> list[dict[str, Any]]:
-        """List image attachments on a post in display order."""
-        return dump(forum_core.list_attachments(post_id))
 
     @mcp.tool()
     def fango_upload_image(image_base64: str) -> dict[str, Any]:
