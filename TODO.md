@@ -78,7 +78,7 @@ history rather than this file.
 - [ ] **Multi-LLM provider abstraction** in `fango/consult/engine.py`.
       Today the Gemini import is concrete; future-proof for OpenAI / Claude
       with a thin `Engine` protocol (the test fake already implements one).
-- [ ] **`fango/templates/skill.md` and `home.html` JSON snippet** are
+- [ ] **`fango/templates/real-estate-search-skill.md` and `home.html` JSON snippet** are
       kept in sync by hand. If we touch the MCP config format, do it once
       in a shared partial.
 - [ ] **MCP session persistence + reconnect**: surface a clear error

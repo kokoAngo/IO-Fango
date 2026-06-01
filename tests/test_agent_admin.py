@@ -83,7 +83,7 @@ class TestSkillVersion:
         assert set(out.keys()) >= {"version", "updated_at", "bytes", "fetch_url"}
         assert isinstance(out["version"], str) and len(out["version"]) == 12
         assert out["bytes"] > 0
-        assert out["fetch_url"] == "/fangobook/skill.md"
+        assert out["fetch_url"] == "/fangobook/real-estate-search-skill.md"
 
     def test_skill_version_no_auth_required(self, tools, tmp_db):
         # Must not raise even with no current_agent set.

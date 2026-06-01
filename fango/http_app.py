@@ -44,7 +44,7 @@ log = logging.getLogger(__name__)
 PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_DIR / "templates"
 STATIC_DIR = PACKAGE_DIR / "static"
-SKILL_MD_PATH = TEMPLATE_DIR / "skill.md"
+SKILL_MD_PATH = TEMPLATE_DIR / "real-estate-search-skill.md"
 
 # Repo-root anchor for the listing image endpoint. ``listing_images.rel_path``
 # is stored relative to this directory.
@@ -417,7 +417,7 @@ def _register_routes(app: FastAPI) -> None:
         })
         return templates.TemplateResponse(request, "home.html", ctx)
 
-    @app.get("/fangobook/skill.md", response_class=PlainTextResponse)
+    @app.get("/fangobook/real-estate-search-skill.md", response_class=PlainTextResponse)
     async def skill_md(request: Request):
         # Render via jinja so {{ base_url }} reflects however the agent reached us.
         from .agent_admin import _skill_version
@@ -431,6 +431,15 @@ def _register_routes(app: FastAPI) -> None:
             skill_updated_at=ver["updated_at"],
         )
         return PlainTextResponse(rendered, media_type="text/markdown; charset=utf-8")
+
+    @app.get("/fangobook/skill.md", include_in_schema=False)
+    async def skill_md_legacy_redirect():
+        """Permanent redirect for agents that cached the old URL."""
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(
+            "/fangobook/real-estate-search-skill.md",
+            status_code=308,
+        )
 
     @app.get("/intro", response_class=HTMLResponse)
     async def landing(request: Request):

@@ -33,21 +33,6 @@
   </p>
 </div>
 
-<script>
-document.querySelectorAll('.copy-btn').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    const target = document.querySelector(btn.dataset.copy);
-    if (!target) return;
-    try {
-      await navigator.clipboard.writeText(target.textContent);
-      const orig = btn.textContent;
-      btn.textContent = "コピー完了 ✓";
-      setTimeout(() => btn.textContent = orig, 1600);
-    } catch (e) {
-      btn.textContent = "コピー失敗";
-    }
-  });
-});
-</script>
+{# Copy-to-clipboard is handled globally by .copy-btn[data-copy] in site.js #}
 
 {% endblock %}

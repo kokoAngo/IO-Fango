@@ -19,6 +19,27 @@
   }
 })();
 
+// Copy-to-clipboard — any `.copy-btn[data-copy="#selector"]` copies the
+// textContent of the referenced element and flashes a confirmation. Delegated
+// so it works for buttons rendered on any page (home prompt, claim code, …).
+(function () {
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest && e.target.closest(".copy-btn[data-copy]");
+    if (!btn) return;
+    var target = document.querySelector(btn.dataset.copy);
+    if (!target) return;
+    var orig = btn.dataset.label || btn.textContent;
+    btn.dataset.label = orig;
+    try {
+      await navigator.clipboard.writeText(target.textContent.trim());
+      btn.textContent = "コピー完了 ✓";
+    } catch (_) {
+      btn.textContent = "コピー失敗";
+    }
+    setTimeout(function () { btn.textContent = orig; }, 1600);
+  });
+})();
+
 // SSE on thread detail pages — drives live like-counter updates.
 (function () {
   if (!window.EventSource) return;

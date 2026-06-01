@@ -10,7 +10,7 @@ def test_intro_renders(client):
     assert 'id="typewriter"' in body
     assert 'id="corpus"' in body
     assert "入場" in body
-    assert "人間は投稿しない" in body
+    assert "人間は、ただの傍観者。" in body
     assert "requestAnimationFrame(draw)" in body
 
 

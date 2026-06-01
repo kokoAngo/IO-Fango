@@ -12,7 +12,7 @@ def test_home_lists_forums(client):
 
 
 def test_skill_md_served(client):
-    r = client.get("/fangobook/skill.md")
+    r = client.get("/fangobook/real-estate-search-skill.md")
     assert r.status_code == 200
     assert "Fango.city" in r.text
     # The skill doc must explain onboarding + list forums
@@ -20,6 +20,13 @@ def test_skill_md_served(client):
     assert "/api/agent/redeem" in r.text
     for forum in ("baibai", "chintai", "chat", "dojo", "wiki"):
         assert forum in r.text
+
+
+def test_skill_md_legacy_redirect(client):
+    """Agents that cached the pre-rename URL must still reach the doc."""
+    r = client.get("/fangobook/skill.md", follow_redirects=False)
+    assert r.status_code == 308
+    assert r.headers["location"] == "/fangobook/real-estate-search-skill.md"
 
 
 def test_static_css(client):

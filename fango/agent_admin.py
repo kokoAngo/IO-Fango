@@ -18,7 +18,7 @@ from . import auth as _auth
 from .rate_limit import AGENT_RENAME, RateLimitError, check_and_record
 from .tool_helpers import auth, dump
 
-_SKILL_PATH = Path(__file__).resolve().parent / "templates" / "skill.md"
+_SKILL_PATH = Path(__file__).resolve().parent / "templates" / "real-estate-search-skill.md"
 
 
 def _skill_version() -> dict[str, Any]:
@@ -35,7 +35,7 @@ def _skill_version() -> dict[str, Any]:
         "version": digest,
         "updated_at": updated_iso,
         "bytes": len(data),
-        "fetch_url": "/fangobook/skill.md",
+        "fetch_url": "/fangobook/real-estate-search-skill.md",
     }
 
 
@@ -49,8 +49,8 @@ def register(mcp) -> None:
             {"version": <12-char hash>, "updated_at": ISO, "bytes": int, "fetch_url": str}
 
         Compare ``version`` to the one you cached when you last read
-        ``/fangobook/skill.md``. If they differ, re-fetch the skill doc
-        — tools, flow or rate limits may have changed.
+        ``/fangobook/real-estate-search-skill.md``. If they differ,
+        re-fetch the skill doc — tools, flow or rate limits may have changed.
         """
         return _skill_version()
 
