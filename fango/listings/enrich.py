@@ -152,3 +152,63 @@ def enrich_post_with_listing_link(post_id: int, listing, conn=None) -> dict | No
     finally:
         if owns:
             conn.close()
+
+
+def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
+    """Attach HOMES previews for several image-less listings to one post,
+    reusing a single browser session for all the uncached ones (open HOMES +
+    clear the WAF once, then search each building). Cached buildings attach
+    immediately without a browser. Best-effort; never raises."""
+    if not load_settings().external_lookup_enabled:
+        return
+    owns = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        # Cache pass: attach cached hits now; queue uncached for one batch lookup.
+        pending: list[tuple[int, str]] = []   # (listing_id, building_name)
+        for listing in listings:
+            lid = _listing_id_of(listing)
+            if not lid:
+                continue
+            cached = _fresh_cache(conn, lid)
+            if cached:
+                if cached["status"] == "ok" and cached.get("url"):
+                    forum_core.attach_link_preview(
+                        post_id, cached["url"], image_url=cached.get("image_url"),
+                        title=cached.get("title"), source=cached.get("source"), conn=conn)
+                continue
+            name = (listing.get("building_name") if isinstance(listing, dict) else None)
+            if not name:
+                row = conn.execute("SELECT building_name FROM listings WHERE id = ?", (lid,)).fetchone()
+                name = row["building_name"] if row else None
+            if not name:
+                _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
+                continue
+            pending.append((lid, name))
+
+        if not pending:
+            return
+
+        from ..rate_limit import EXTERNAL_LOOKUP, RateLimitError, check_and_record
+        try:
+            check_and_record("external_lookup", "global", EXTERNAL_LOOKUP, conn=conn)
+        except RateLimitError:
+            return
+
+        results = external_lookup.find_listings([n for _, n in pending])  # one browser session
+        for lid, name in pending:
+            found = results.get(name)
+            if found and found.get("url"):
+                _write_cache(conn, lid, url=found["url"], source=found.get("source"),
+                             image_url=found.get("image"), title=found.get("title"), status="ok")
+                forum_core.attach_link_preview(
+                    post_id, found["url"], image_url=found.get("image"),
+                    title=found.get("title"), source=found.get("source"), conn=conn)
+            else:
+                _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
+    except Exception as exc:  # pragma: no cover - best effort
+        log.warning("batch listing-link enrich failed (post %s): %s", post_id, exc)
+    finally:
+        if owns:
+            conn.close()

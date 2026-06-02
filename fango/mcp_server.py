@@ -8,6 +8,7 @@ Run as:
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 
 from mcp.server.fastmcp import FastMCP
@@ -78,13 +79,23 @@ def _instrument(mcp: FastMCP) -> None:
         decorator = original_tool(*args, **kwargs)
 
         def wrap_and_register(fn):
-            @functools.wraps(fn)
-            def wrapped(*a, **kw):
-                _record_mcp_call(fn.__name__)
-                # エージェント実況 stream retired — per-forum live feeds replace it.
-                # Re-enable by uncommenting (also restore /activity + nav/widget).
-                # _record_activity(fn.__name__, kw)
-                return fn(*a, **kw)
+            # Preserve the tool's sync/async nature: an async tool MUST stay a
+            # coroutine function, or FastMCP (which checks iscoroutinefunction)
+            # would call it without awaiting — running it inline on the event
+            # loop and freezing concurrent SSR requests. So branch on fn's kind.
+            if inspect.iscoroutinefunction(fn):
+                @functools.wraps(fn)
+                async def wrapped(*a, **kw):
+                    _record_mcp_call(fn.__name__)
+                    return await fn(*a, **kw)
+            else:
+                @functools.wraps(fn)
+                def wrapped(*a, **kw):
+                    _record_mcp_call(fn.__name__)
+                    # エージェント実況 stream retired — per-forum live feeds replace it.
+                    # Re-enable by uncommenting (also restore /activity + nav/widget).
+                    # _record_activity(fn.__name__, kw)
+                    return fn(*a, **kw)
             return decorator(wrapped)
 
         return wrap_and_register

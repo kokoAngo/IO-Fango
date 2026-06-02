@@ -88,13 +88,44 @@ def _settle(page) -> None:
     page.wait_for_timeout(1500)
 
 
-def _browser_find(building_name: str) -> dict | None:
-    """Sync Playwright HOMES lookup. Runs in its own thread (no event loop)."""
+def _search_one(page, building_name: str) -> dict | None:
+    """One freeword search on an already-open HOMES page: type the building
+    name, submit, match the result card to our building, read its room page's
+    og:image/title. Returns {url, source, image, title} or None."""
+    page.goto(_TOP, wait_until="domcontentloaded", timeout=_TIMEOUT)
+    _settle(page)
+    box = page.locator('input[name="cond[freeword]"]').first
+    box.click()
+    box.fill(building_name)
+    box.press("Enter")
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=20000)
+    except Exception:
+        pass
+    page.wait_for_timeout(2000)
+    href = page.evaluate(_MATCH_JS, building_name)
+    if not href:
+        return None
+    page.goto(href, wait_until="domcontentloaded", timeout=_TIMEOUT)
+    _settle(page)
+    og = page.evaluate(_OG_JS) or {}
+    return {
+        "url": href,
+        "source": "homes",
+        "image": og.get("image"),
+        "title": (og.get("title") or "").strip() or None,
+    }
+
+
+def _browser_find_many(names: list[str]) -> dict:
+    """Resolve several building names in ONE browser session (open HOMES once,
+    clear the WAF once, then search each). Returns {name: result|None}."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
         log.warning("playwright unavailable for HOMES lookup: %s", exc)
-        return None
+        return {}
+    out: dict = {n: None for n in names}
     with sync_playwright() as p:
         browser = _launch(p)
         try:
@@ -104,29 +135,12 @@ def _browser_find(building_name: str) -> dict | None:
             )
             ctx.add_init_script(_STEALTH)
             page = ctx.new_page()
-            page.goto(_TOP, wait_until="domcontentloaded", timeout=_TIMEOUT)
-            _settle(page)
-            box = page.locator('input[name="cond[freeword]"]').first
-            box.click()
-            box.fill(building_name)
-            box.press("Enter")
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=20000)
-            except Exception:
-                pass
-            page.wait_for_timeout(2500)
-            href = page.evaluate(_MATCH_JS, building_name)
-            if not href:
-                return None
-            page.goto(href, wait_until="domcontentloaded", timeout=_TIMEOUT)
-            _settle(page)
-            og = page.evaluate(_OG_JS) or {}
-            return {
-                "url": href,
-                "source": "homes",
-                "image": og.get("image"),
-                "title": (og.get("title") or "").strip() or None,
-            }
+            for name in names:
+                try:
+                    out[name] = _search_one(page, name)
+                except Exception as exc:  # pragma: no cover - browser variance
+                    log.debug("HOMES search failed for %r: %s", name, exc)
+            return out
         finally:
             browser.close()
 
@@ -167,4 +181,17 @@ def find_listing(building_name: str, *, source_url: str | None = None,
     name = (building_name or "").strip()
     if not name:
         return None
-    return _run_isolated(_browser_find, name)
+    res = _run_isolated(_browser_find_many, [name], timeout=75.0) or {}
+    return res.get(name)
+
+
+def find_listings(names: list[str]) -> dict:
+    """Resolve several building names in a single browser session (open HOMES +
+    clear the WAF once, then search each). Returns ``{name: result|None}``.
+    Best-effort, never raises."""
+    clean = list(dict.fromkeys(n.strip() for n in (names or []) if n and n.strip()))
+    if not clean:
+        return {}
+    # ~roughly per-building budget + one WAF warm-up.
+    timeout = 40.0 + 30.0 * len(clean)
+    return _run_isolated(_browser_find_many, clean, timeout=timeout) or {}

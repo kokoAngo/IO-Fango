@@ -31,23 +31,25 @@ log = logging.getLogger(__name__)
 _MAX_ATTACHED = 3
 
 
-def _spawn_enrich(post_id: int, item: dict) -> None:
-    """Fire-and-forget: fetch the listing's HOMES link + photo in a background
-    daemon thread and attach it to ``post_id``. A no-op unless external lookup
-    is enabled. Runs off the request path because the browser lookup is slow;
-    by the time it attaches (~10s later) the post is committed. Best-effort."""
+def _spawn_enrich(post_id: int, items: list[dict]) -> None:
+    """Fire-and-forget: fetch up to ``_MAX_ATTACHED`` listings' HOMES links +
+    photos in a background daemon thread (one shared browser session) and attach
+    them to ``post_id``. A no-op unless external lookup is enabled. Runs off the
+    request path because the browser lookups are slow; by the time they attach
+    the post is committed. Best-effort."""
     from ..config import load_settings
     if not load_settings().external_lookup_enabled:
         return
     import threading
-    data = {"id": item.get("id"), "building_name": item.get("building_name")}
-    if not data["id"]:
+    data = [{"id": it.get("id"), "building_name": it.get("building_name")}
+            for it in items if it.get("id")]
+    if not data:
         return
 
     def _run():
         try:
             from ..listings import enrich as _enrich
-            _enrich.enrich_post_with_listing_link(post_id, data)  # own DB connection
+            _enrich.enrich_post_with_listings(post_id, data)  # own DB connection
         except Exception as exc:  # pragma: no cover - best effort
             log.debug("background enrich failed (post %s): %s", post_id, exc)
 
@@ -178,7 +180,7 @@ def record_turn(
         )
 
         if results and results.get("items"):
-            first_imageless = None
+            imageless = []
             for item in results["items"][:_MAX_ATTACHED]:
                 lid = item.get("id")
                 if lid is None:
@@ -187,13 +189,13 @@ def record_turn(
                     forum_core.attach_listing(a_post.id, int(lid), conn=conn)
                 except forum_core.ForumError:
                     continue
-                if first_imageless is None and not item.get("thumbnail_url"):
-                    first_imageless = item
-            # Image-less listing → fetch its HOMES link + photo in the BACKGROUND
-            # (a ~10s browser lookup) so the consult reply isn't blocked. The
-            # card appears on the thread a few seconds later. One per turn.
-            if first_imageless is not None:
-                _spawn_enrich(a_post.id, first_imageless)
+                if not item.get("thumbnail_url"):
+                    imageless.append(item)
+            # Image-less listings → fetch their HOMES links + photos in the
+            # BACKGROUND (one shared browser session) so the consult reply isn't
+            # blocked. The cards appear on the thread a few seconds later.
+            if imageless:
+                _spawn_enrich(a_post.id, imageless)
 
         return {
             "posted": True,
@@ -386,7 +388,7 @@ def record_search(
         a_post = forum_core.reply(
             forum, _thread.id, a_body, system.id, tags=["search", "fango"], conn=conn,
         )
-        first_imageless = None
+        imageless = []
         for item in (items or [])[:_MAX_ATTACHED]:
             lid = item.get("id")
             if lid is None:
@@ -395,10 +397,10 @@ def record_search(
                 forum_core.attach_listing(a_post.id, int(lid), conn=conn)
             except forum_core.ForumError:
                 continue
-            if first_imageless is None and not item.get("thumbnail_url"):
-                first_imageless = item
-        if first_imageless is not None:
-            _spawn_enrich(a_post.id, first_imageless)
+            if not item.get("thumbnail_url"):
+                imageless.append(item)
+        if imageless:
+            _spawn_enrich(a_post.id, imageless)
 
         rl.record_event("search_post_dup", crit_key, conn=conn)
         rl.record_event("search_post_cap", caller, conn=conn)

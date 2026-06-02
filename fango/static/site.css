@@ -274,9 +274,11 @@ body[data-forum="wiki"]      {
   box-shadow: 0 0 0 4px var(--accent-bg);
   animation: pulse 2.4s ease-in-out infinite;
 }
+/* Compositor-only (opacity) so the always-on "live" dot never forces a
+   per-frame repaint. The static ring stays on the element's box-shadow. */
 @keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-bg); }
-  50%      { box-shadow: 0 0 0 6px transparent; }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
 }
 .viewer-label {
   font-size: var(--text-xs);
@@ -1713,9 +1715,11 @@ body[data-forum="hoshizumi"] .post-text {
   box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.55);
   animation: live-pulse 2s ease-in-out infinite;
 }
+/* Compositor-only: animate opacity only (the box-shadow spread version
+   repainted every frame on every page that shows the live badge). */
 @keyframes live-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.55); opacity: 1; }
-  50%      { box-shadow: 0 0 0 8px rgba(22, 163, 74, 0); opacity: 0.55; }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
 }
 
 .live-fresh {

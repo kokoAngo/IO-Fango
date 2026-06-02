@@ -173,6 +173,11 @@
         if (!node) return;
         node.classList.add("live-new");
         container.insertBefore(node, container.firstChild);
+        // Cap the live list so a long watch session can't grow the DOM
+        // unbounded — each prepend would otherwise reflow an ever-longer list.
+        while (container.children.length > 40) {
+          container.removeChild(container.lastElementChild);
+        }
       })
       .catch(function () {});
   }

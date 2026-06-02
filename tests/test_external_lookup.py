@@ -133,6 +133,63 @@ class TestEnrich:
         assert len(calls) == 1  # negative cached → no re-lookup
 
 
+class TestEnrichBatch:
+    def test_enriches_up_to_three_in_one_session(self, a_post, listing_factory, monkeypatch):
+        _, post_id = a_post
+        monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
+        a = listing_factory(building_name="GENOVIA南麻布", url=None)
+        b = listing_factory(building_name="コンフォリア下北沢", url=None)
+        c = listing_factory(building_name="存在しないビル", url=None)  # HOMES miss
+        calls: list = []
+
+        def fake_find_listings(names):
+            calls.append(list(names))
+            return {
+                "GENOVIA南麻布": {"url": "https://www.homes.co.jp/chintai/room/aaa/",
+                                  "source": "homes", "image": "https://image1.homes.jp/a.jpg", "title": "A"},
+                "コンフォリア下北沢": {"url": "https://www.homes.co.jp/chintai/room/bbb/",
+                                      "source": "homes", "image": "https://image1.homes.jp/b.jpg", "title": "B"},
+                "存在しないビル": None,
+            }
+        monkeypatch.setattr(external_lookup, "find_listings", fake_find_listings)
+
+        enrich.enrich_post_with_listings(post_id, [
+            {"id": a.id, "building_name": "GENOVIA南麻布"},
+            {"id": b.id, "building_name": "コンフォリア下北沢"},
+            {"id": c.id, "building_name": "存在しないビル"},
+        ])
+        urls = {p["url"] for p in forum_core.list_link_previews(post_id)}
+        assert urls == {"https://www.homes.co.jp/chintai/room/aaa/",
+                        "https://www.homes.co.jp/chintai/room/bbb/"}  # 2 hits, miss skipped
+        assert len(calls) == 1                       # ONE batch browser session
+        assert set(calls[0]) == {"GENOVIA南麻布", "コンフォリア下北沢", "存在しないビル"}
+
+    def test_uses_cache_and_only_looks_up_uncached(self, a_post, listing_factory, monkeypatch):
+        _, post_id = a_post
+        monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
+        cached = listing_factory(building_name="Cached", url=None)
+        fresh = listing_factory(building_name="Fresh", url=None)
+        # Pre-warm one via the single resolver.
+        _stub_find(monkeypatch, found=_FOUND)
+        enrich.resolve_external_link(cached.id, "Cached")
+
+        calls: list = []
+        def fake_find_listings(names):
+            calls.append(list(names))
+            return {"Fresh": {"url": "https://www.homes.co.jp/chintai/room/fff/", "source": "homes",
+                              "image": None, "title": "F"}}
+        monkeypatch.setattr(external_lookup, "find_listings", fake_find_listings)
+
+        enrich.enrich_post_with_listings(post_id, [
+            {"id": cached.id, "building_name": "Cached"},
+            {"id": fresh.id, "building_name": "Fresh"},
+        ])
+        # Cached one attached from cache; only the uncached name hit the browser.
+        assert calls == [["Fresh"]]
+        urls = {p["url"] for p in forum_core.list_link_previews(post_id)}
+        assert _FOUND["url"] in urls and "https://www.homes.co.jp/chintai/room/fff/" in urls
+
+
 # --------------------------------------------------------------------------
 # The discovered link is surfaced to the agent (consult results + get_listing)
 # --------------------------------------------------------------------------

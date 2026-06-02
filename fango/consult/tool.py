@@ -6,8 +6,11 @@ the caller invokes once per turn.
 """
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Any
+
+import anyio
 
 from ..auth import client_ip_var, current_agent_var
 from ..config import load_consult_settings
@@ -51,7 +54,7 @@ def _attach_external_links(briefs: list[dict], conn) -> None:
 def register(mcp) -> None:
 
     @mcp.tool()
-    def fango_consult(
+    async def fango_consult(
         message: str,
         session_id: str | None = None,
     ) -> dict[str, Any]:
@@ -75,7 +78,14 @@ def register(mcp) -> None:
             ``results`` ({items, total}), ``suggested_next_tools``, ``turn``,
             ``usage`` ({input_tokens, output_tokens}).
         """
-        return _run_turn(message=message, session_id=session_id)
+        # FastMCP runs a *sync* tool inline on the event loop, so the multi-second
+        # Gemini calls + DB writes inside _run_turn would freeze every concurrent
+        # SSR request (forum navigation hangs while an agent is consulting). Make
+        # the tool async and push the blocking work to a worker thread; anyio
+        # carries the request contextvars (agent key / client IP) into it.
+        return await anyio.to_thread.run_sync(
+            functools.partial(_run_turn, message=message, session_id=session_id)
+        )
 
 
 # ---------------------------------------------------------------------------
