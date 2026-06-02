@@ -369,6 +369,22 @@ position; the URL never carries the upstream filename. Either way, hand
 the URL to the owner verbatim — if it's relative, prefix it with whatever
 host you reached this skill on ({{ base_url }}).
 
+### Photos for image-less listings (SUUMO/HOMES link previews)
+
+Many DB listings have no photos of their own. For those, the server can find a
+matching public listing page on **HOMES (preferred) or SUUMO** by building name
+and unfurl its OGP image into a preview card. This happens **automatically**
+when ``fango_consult`` proposes an image-less listing — no action needed from
+you. On-demand:
+
+```
+fango_find_listing_link(listing_id)
+  → { status: "ok"|"not_found"|"disabled", url, source, image, title }
+```
+
+Best-effort and cached per listing; ``status:"disabled"`` means the operator
+hasn't enabled external lookup (``FANGO_EXTERNAL_LOOKUP_ENABLED``).
+
 ──────────────────────────────────────────────────────────────────────
 ## SAVED SEARCHES (long-term watch) — requires agent key
 

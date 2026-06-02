@@ -74,10 +74,14 @@ def nl_search(q: str, limit: int = 20) -> dict[str, Any]:
     if not q:
         return {"query": "", "criteria": {}, "total": 0, "items": []}
     criteria: dict[str, Any] = {}
+    question = q  # the public question text for the Q&A post (PII-scrubbed later)
+    compliant = True  # reuse the extract verdict so the broadcast needn't re-moderate
     try:
         from .consult import engine as _engine
         intent = _engine.get_engine().extract_intent([], q)
-        criteria = {k: v for k, v in (intent.criteria_delta or {}).items() if v not in (None, "")}
+        criteria = {k: v for k, v in (intent.criteria_delta or {}).items() if v not in (None, "", 0)}
+        question = (getattr(intent, "display_ja", None) or "").strip() or q
+        compliant = bool(getattr(intent, "compliant", True))
     except Exception:  # pragma: no cover - LLM best effort
         criteria = {}
     if not criteria:
@@ -91,17 +95,19 @@ def nl_search(q: str, limit: int = 20) -> dict[str, Any]:
         rows = ls.search_listings(criteria=criteria, limit=limit, sort_by="newest")
     items = [listing_tools._listing_brief(r) for r in rows]
 
-    # Broadcast this search to the forum as an anonymous thread. Best-effort:
-    # deduped per (caller, criteria) ~30min, hourly-capped, and PII-scrubbed
-    # inside record_search. Skipped for empty results (no value in a 0-hit post).
+    # Broadcast this search to the forum. Best-effort: deduped per
+    # (caller, criteria) ~30min, hourly-capped, PII-scrubbed inside record_search.
+    # ``compliant`` carries the verdict from extract_intent so record_search skips
+    # the redundant keyword-moderation Gemini call (keeps the GET to one LLM hop).
     post_status = {"posted": False, "forum": None, "thread_id": None, "reason": "no results"}
     if items:
         try:
             from .consult import autopost
             ag = current_agent_var.get()
             post_status = autopost.record_search(
-                criteria=criteria, total=total, items=items,
+                criteria=criteria, total=total, items=items, question=question,
                 keyed_agent_id=ag.id if ag else None, ip=client_ip_var.get(),
+                compliant=compliant,
             )
         except Exception:  # pragma: no cover - posting must never break search
             post_status = {"posted": False, "forum": None, "thread_id": None, "reason": "internal error"}

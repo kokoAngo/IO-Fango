@@ -316,3 +316,42 @@ def register(mcp) -> None:
         """
         _enforce_read_quota()
         return get_listing_images_payload(listing_id, kind)
+
+    @mcp.tool()
+    def fango_find_listing_link(listing_id: int) -> dict[str, Any] | None:
+        """Find a public SUUMO/HOMES URL for a listing by its building name and
+        unfurl the link's OGP preview — WITHOUT posting anything. Useful when a
+        DB listing has no photos. HOMES is preferred over SUUMO; returns nothing
+        if neither has a match.
+
+        Returns ``{status, listing_id, building_name, url, source, image,
+        title}``. ``status`` is ``"ok"`` / ``"not_found"`` / ``"disabled"``
+        (server-side external lookup is off) / null (listing missing).
+        """
+        _enforce_read_quota()
+        from ..config import load_settings
+        if not load_settings().external_lookup_enabled:
+            return {"status": "disabled"}
+        from . import external_lookup, service as svc
+        from .. import unfurl
+        listing = svc.get_listing(listing_id)
+        if listing is None:
+            return None
+        found = external_lookup.find_external_url(
+            listing.building_name,
+            ward=(listing.ward or listing.city),
+            source_url=listing.url,
+        )
+        if not found:
+            return {"status": "not_found", "listing_id": listing_id,
+                    "building_name": listing.building_name}
+        ogp = unfurl.fetch_ogp(found["url"]) or {}
+        return {
+            "status": "ok",
+            "listing_id": listing_id,
+            "building_name": listing.building_name,
+            "url": found["url"],
+            "source": found["source"],
+            "image": ogp.get("image"),
+            "title": ogp.get("title"),
+        }

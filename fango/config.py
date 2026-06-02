@@ -63,6 +63,17 @@ class Settings:
     notion_token: str | None
     notion_listings_db: str | None
     public_base_url: str | None
+    # Outbound SUUMO/HOMES lookup + OGP unfurl. Off by default (incl. tests/dev);
+    # set FANGO_EXTERNAL_LOOKUP_ENABLED=1 in production to enable scraping.
+    external_lookup_enabled: bool
+    external_lookup_ua: str
+
+
+# A realistic desktop UA so SUUMO/HOMES return normal markup (not a bot page).
+_DEFAULT_LOOKUP_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 
 def load_settings() -> Settings:
@@ -82,6 +93,8 @@ def load_settings() -> Settings:
         notion_token=os.environ.get("NOTION_TOKEN") or None,
         notion_listings_db=os.environ.get("NOTION_LISTINGS_DATABASE_ID") or None,
         public_base_url=pub,
+        external_lookup_enabled=_env_bool("FANGO_EXTERNAL_LOOKUP_ENABLED", False),
+        external_lookup_ua=os.environ.get("FANGO_EXTERNAL_LOOKUP_UA") or _DEFAULT_LOOKUP_UA,
     )
 
 

@@ -40,14 +40,19 @@
     {% if post.listing_refs %}
       {% for ref in post.listing_refs %}
         {% if ref is mapping %}
-          <a class="listing-card" href="/listings/{{ ref.id }}">
-            <div class="lc-head">
-              <span class="lc-id mono">#{{ '%05d' % ref.id }}</span>
-              <span class="lc-name">{{ ref.building_name or '無題物件' }}</span>
-            </div>
-            <div class="lc-spec">
-              {% if ref.layout %}<span>{{ ref.layout }}</span>{% endif %}
-              <span class="lc-price">{{ ref.price_man | yen_man }}</span>
+          <a class="listing-card{% if ref.thumbnail %} has-thumb{% endif %}" href="/listings/{{ ref.id }}">
+            {% if ref.thumbnail %}
+              <img class="lc-thumb" src="{{ ref.thumbnail }}" alt="" loading="lazy" decoding="async">
+            {% endif %}
+            <div class="lc-body">
+              <div class="lc-head">
+                <span class="lc-id mono">#{{ '%05d' % ref.id }}</span>
+                <span class="lc-name">{{ ref.building_name or '無題物件' }}</span>
+              </div>
+              <div class="lc-spec">
+                {% if ref.layout %}<span>{{ ref.layout }}</span>{% endif %}
+                <span class="lc-price">{{ ref.price_man | yen_man }}</span>
+              </div>
             </div>
           </a>
         {% else %}
@@ -55,6 +60,20 @@
             <div class="lc-head"><span class="lc-id mono">#{{ '%05d' % ref }}</span><span class="lc-name">物件</span></div>
           </a>
         {% endif %}
+      {% endfor %}
+    {% endif %}
+
+    {% if post.link_previews %}
+      {% for lp in post.link_previews %}
+        <a class="link-preview-card" href="{{ lp.url }}" target="_blank" rel="noopener noreferrer nofollow">
+          {% if lp.image_url %}
+            <img class="lp-thumb" src="{{ lp.image_url }}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+          {% endif %}
+          <div class="lp-body">
+            <div class="lp-title" lang="ja">{{ lp.title or lp.url }}</div>
+            <div class="lp-source">{{ lp.source or 'link' }} ↗</div>
+          </div>
+        </a>
       {% endfor %}
     {% endif %}
 

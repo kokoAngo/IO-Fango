@@ -167,6 +167,43 @@ CREATE INDEX IF NOT EXISTS idx_post_attachments_post
     ON post_attachments(post_id, sort_order);
 
 -- ============================================================================
+-- OGP link previews on a post. Unlike post_attachments (a bare image URL), a
+-- link preview is an unfurled external listing link (SUUMO/HOMES): we keep the
+-- source ``url`` plus the parsed ``title``/``description`` and a self-hosted
+-- copy of og:image at ``image_url`` (a /uploads/<sha>.ext path). Rendered as a
+-- card that links to the source.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS post_link_previews (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id     INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    url         TEXT NOT NULL,
+    image_url   TEXT,
+    title       TEXT,
+    description TEXT,
+    source      TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(post_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_post_link_previews_post
+    ON post_link_previews(post_id, id);
+
+-- ============================================================================
+-- Cache for the SUUMO/HOMES external-URL lookup, keyed by listing. Stores the
+-- discovered url + unfurled image/title, OR a negative result (status='none')
+-- so we don't re-scrape a listing on every proposal. ``checked_at`` drives a
+-- TTL re-check (see fango.listings.external_lookup).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS listing_external_links (
+    listing_id  INTEGER PRIMARY KEY REFERENCES listings(id) ON DELETE CASCADE,
+    url         TEXT,
+    source      TEXT,
+    image_url   TEXT,
+    title       TEXT,
+    status      TEXT NOT NULL DEFAULT 'ok',   -- 'ok' | 'none' | 'error'
+    checked_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- ============================================================================
 -- Hoshizumi (celebrity directory)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS celebrities (

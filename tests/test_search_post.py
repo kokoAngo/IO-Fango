@@ -17,19 +17,23 @@ def _listing():
     })
 
 
-def test_structured_search_posts_to_chintai(tmp_db):
+def test_structured_search_posts_qa_to_chintai(tmp_db):
     _listing()
-    from fango.auth import pseudonym, get_or_create_anon_agent_for_ip
+    from fango.auth import get_or_create_anon_agent_for_ip
     crit = {"prefecture": "東京都", "layout": "1LDK", "rent_max_yen": 200_000}
     r = autopost.record_search(criteria=crit, total=1, items=[{"id": 1}],
                                keyed_agent_id=None, ip="203.0.113.7")
     assert r["posted"] is True and r["forum"] == "chintai"
-    body = forum_core.get_thread(r["forum"], r["thread_id"])["posts"][0].body
-    assert "🔍" in body and "1LDK" in body
-    # Anonymous per-IP identity.
+    posts = forum_core.get_thread(r["forum"], r["thread_id"])["posts"]
+    # Renders as a Q&A pair: question post + FANGO answer post.
+    assert len(posts) == 2
+    q_post, a_post = posts[0], posts[1]
+    # Question is authored by the anonymous asker; answer by the FANGO narrator.
     anon = get_or_create_anon_agent_for_ip("203.0.113.7")
-    assert pseudonym(anon.id) in body
-    assert forum_core.get_thread(r["forum"], r["thread_id"])["posts"][0].listing_refs
+    assert q_post.author_id == anon.id
+    assert "1LDK" in q_post.body
+    # The listing is attached to the answer (FANGO's reply), not the question.
+    assert a_post.listing_refs
 
 
 def test_sale_criteria_routes_to_baibai(tmp_db):

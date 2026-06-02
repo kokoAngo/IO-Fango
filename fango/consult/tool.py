@@ -110,9 +110,11 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
                 compliant=False,
             )
 
-        # Merge delta into the running criteria.
+        # Merge delta into the running criteria. Drop 0 too — the LLM sometimes
+        # fills 0 for unspecified numeric limits, and walk_minutes_max=0 /
+        # area_max_sqm=0 would otherwise exclude every listing.
         merged = dict(sess.last_criteria)
-        merged.update({k: v for k, v in intent.criteria_delta.items() if v not in (None, "")})
+        merged.update({k: v for k, v in intent.criteria_delta.items() if v not in (None, "", 0)})
 
         usage_in = intent.input_tokens
         usage_out = intent.output_tokens

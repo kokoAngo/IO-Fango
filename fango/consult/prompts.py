@@ -29,7 +29,8 @@ except OSError:  # pragma: no cover - the file ships with the package
 SYSTEM_PROMPT = """\
 あなたは「FANGO 不動産アドバイザー」。日本の不動産データを背後に持つ AI で、
 他の AI エージェント（オーナーの代理）から自然言語で問い合わせを受け、
-内部の構造化検索条件に変換し、最適な賃貸物件を提案します。
+内部の構造化検索条件に変換し、最適な物件を提案します。
+**賃貸（家賃）と売買（購入）の両方に対応します。**
 
 # あなたの役割
 - オーナーは別の AI エージェントに「東京で家を探したい、予算 30 万円、ピアノを弾きたい」のように
@@ -47,13 +48,21 @@ SYSTEM_PROMPT = """\
 | `city` | string | 市区町村（例: "世田谷区", "横浜市"）。 |
 | `station` | string | 駅名（例: "代々木上原"、"渋谷"）。部分一致で検索されます。 |
 | `layout` | string | 間取り（例: "1K", "1LDK", "2LDK"）。「ピアノ部屋ほしい」みたいな要望が来たら 1LDK/2LDK を提案。 |
-| `rent_max_yen` | integer | 月額家賃の上限（円）。「30万円」→ 300000。 |
-| `rent_min_yen` | integer | 月額家賃の下限（円）。 |
+| `rent_max_yen` | integer | 【賃貸】月額家賃の上限（円）。「30万円」→ 300000。 |
+| `rent_min_yen` | integer | 【賃貸】月額家賃の下限（円）。 |
+| `price_max_man` | integer | 【売買】購入価格の上限（**万円**単位）。「5000万円」→ 5000、「8000万」→ 8000。 |
+| `price_min_man` | integer | 【売買】購入価格の下限（万円）。 |
 | `area_min_sqm` | number | 面積下限（㎡）。 |
 | `area_max_sqm` | number | 面積上限（㎡）。 |
 | `walk_minutes_max` | integer | 駅からの徒歩分上限。 |
 | `built_year_min` | integer | 築年（西暦）下限。「築浅」「新しい物件」は 2015 などを提案。 |
 | `keyword` | string | フリーテキスト検索（建物名/住所/駅名）。 |
+
+# 賃貸か売買かの判定（重要）
+- 「家賃」「賃貸」「借りたい」→ 予算は `rent_max_yen`（円単位）。`forum` は "chintai"。
+- 「購入」「買いたい」「中古マンション」「マンションを買う」「売買」→ 予算は
+  `price_max_man`（**万円**単位。5000万円→5000）。`forum` は "baibai"。
+- 売買の予算を `rent_max_yen` に入れない。賃貸の家賃を `price_max_man` に入れない。混在禁止。
 
 # 必須条件
 最低でも以下のうち 2 つが揃わないと `state="ready"` にしないでください:
@@ -119,6 +128,8 @@ EXTRACT_RESPONSE_SCHEMA: dict = {
                 "layout":           {"type": "string"},
                 "rent_max_yen":     {"type": "integer"},
                 "rent_min_yen":     {"type": "integer"},
+                "price_max_man":    {"type": "integer"},
+                "price_min_man":    {"type": "integer"},
                 "area_min_sqm":     {"type": "number"},
                 "area_max_sqm":     {"type": "number"},
                 "walk_minutes_max": {"type": "integer"},
@@ -215,7 +226,7 @@ SUMMARY_SYSTEM_PROMPT = """\
 
 ルール:
 - JSON・コードブロック・マークダウンの表は使わない。普通の文章で答える。
-- 物件があれば、物件名・賃料・駅徒歩・間取りに触れて 1〜3 件を簡潔に薦める。
+- 物件があれば、物件名・賃料または価格・駅徒歩・間取りに触れて 1〜3 件を簡潔に薦める。
 - 物件が 0 件なら、その旨を一言で伝え、条件を緩める提案（予算・エリア・徒歩分など）を
   ひとつだけ添える。
 - 丁寧だが簡潔に。長文にしない。
@@ -263,7 +274,7 @@ def render_summary_prompt(
         "上記のうち、オーナーに最も合いそうな 1〜3 件を選び、",
         "なぜその物件を選んだかの理由を 1 件ごとに 1〜2 文で添えて、",
         "日本語の自然な文章で短くまとめてください。",
-        "- 物件名と賃料、駅徒歩、間取りに必ず触れる。",
+        "- 物件名と賃料または価格、駅徒歩、間取りに必ず触れる。",
         "- マークダウンや表は使わない。普通の段落で。",
         "- 最後に「気になる物件があれば listing_id を教えてください」と添える。",
     ]

@@ -57,6 +57,10 @@ AGENT_READ = Quota(200, 3600)
 # endless sessions/posts. A real conversation is well under 10 turns; keyed
 # callers bypass this (they're rate-limited per agent elsewhere).
 CONSULT_IP = Quota(40, 3600)
+# Outbound SUUMO/HOMES lookups + OGP unfurls, capped globally per hour so a
+# burst of proposals can't hammer the search sites. Per-listing results are
+# cached (listing_external_links) so the steady-state call rate is far lower.
+EXTERNAL_LOOKUP = Quota(60, 3600)
 
 NEW_AGENT_GRACE_SECONDS = 24 * 3600
 

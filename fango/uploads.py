@@ -61,8 +61,9 @@ def _ext_for(mime: str) -> str:
 
 
 def save_image(image_base64: str) -> dict:
-    """Decode + validate + dedup + write. Returns a dict the MCP tool
-    can ship straight back to the caller."""
+    """Decode a base64 (optionally data-URL) payload, then validate + dedup +
+    write via :func:`save_image_bytes`. Returns a dict the MCP tool can ship
+    straight back to the caller."""
     if not image_base64 or not isinstance(image_base64, str):
         raise UploadError("image_base64 must be a non-empty string")
     # Strip a possible data-URL prefix.
@@ -73,6 +74,14 @@ def save_image(image_base64: str) -> dict:
         data = base64.b64decode(payload, validate=False)
     except (ValueError, TypeError) as exc:
         raise UploadError(f"invalid base64: {exc}") from None
+    return save_image_bytes(data)
+
+
+def save_image_bytes(data: bytes) -> dict:
+    """Validate + dedup + write raw image bytes. Returns the same shape as
+    :func:`save_image` (``url`` / ``sha256`` / ``size_bytes`` / ``mime`` /
+    ``reused``). Used by the base64 upload path and by server-side image
+    self-hosting (e.g. caching an unfurled og:image)."""
     if not data:
         raise UploadError("decoded image is empty")
     if len(data) > MAX_SIZE_BYTES:

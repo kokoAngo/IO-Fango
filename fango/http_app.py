@@ -260,6 +260,40 @@ class McpHostAllowlistMiddleware:
         await self.app(scope, receive, send)
 
 
+class McpAcceptHeaderMiddleware:
+    """Be lenient about the ``Accept`` header on the /mcp subtree.
+
+    The streamable-HTTP MCP transport rejects a POST (406) unless ``Accept``
+    contains BOTH ``application/json`` and ``text/event-stream``. Some clients
+    (e.g. OpenClaw) send only ``application/json`` or nothing, which surfaces to
+    the agent as "integration not available". We merge the two required types
+    into whatever the client sent so lenient clients connect without config.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").startswith("/mcp"):
+            kept: list[tuple[bytes, bytes]] = []
+            accept = b""
+            for k, v in scope.get("headers", ()):
+                if k == b"accept":
+                    accept = v
+                else:
+                    kept.append((k, v))
+            low = accept.lower()
+            parts = [accept] if accept else []
+            if b"application/json" not in low:
+                parts.append(b"application/json")
+            if b"text/event-stream" not in low:
+                parts.append(b"text/event-stream")
+            kept.append((b"accept", b", ".join(p for p in parts if p)))
+            scope = dict(scope)
+            scope["headers"] = kept
+        await self.app(scope, receive, send)
+
+
 _PUBLIC_READ_PREFIXES = ("/listings/", "/baibai/", "/chintai/", "/chat/", "/dojo/", "/wiki/")
 # Substrings that flag obvious non-browser fetchers. We match
 # case-insensitively against the User-Agent header. Anything containing
@@ -417,6 +451,7 @@ def _build_app() -> FastAPI:
 
     app = FastAPI(title="IO.Fango", lifespan=lifespan)
     app.add_middleware(AgentKeyMiddleware)
+    app.add_middleware(McpAcceptHeaderMiddleware)
     app.add_middleware(McpHostAllowlistMiddleware)
     app.add_middleware(ScraperGuardMiddleware)
     app.add_middleware(TimingMiddleware)
@@ -766,6 +801,13 @@ def _register_routes(app: FastAPI) -> None:
         data = svc.get_thread(thread_id)
         if data is None:
             raise HTTPException(status_code=404, detail="thread not found")
+        # get_thread returns listing_refs as bare IDs; re-resolve to the rich
+        # card shape (name/layout/price + thumbnail) so the conversation page
+        # renders the same photo cards as the feeds.
+        rich_refs = _resolve_listing_refs([p.id for p in data["posts"]])
+        for p in data["posts"]:
+            if p.listing_refs:
+                p.listing_refs = rich_refs.get(p.id, [])
         # Map author id → agent for byline display
         authors = _resolve_authors(p.author_id for p in data["posts"])
         ctx = shared_ctx(request, active_forum=forum)
@@ -797,6 +839,9 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404)
         from .models import Post
         post = Post.from_row(row)
+        # Attach the rich listing cards (name/price/thumbnail) so a post arriving
+        # live over SSE shows the same photo card as one rendered on full load.
+        post.listing_refs = _resolve_listing_refs([post.id]).get(post.id, [])
         authors = _resolve_authors([post.author_id])
         return templates.TemplateResponse(
             request, "partials/post.html",
@@ -955,6 +1000,7 @@ def _recent_posts_across_forums(limit: int = 30) -> list[dict]:
     authors = _resolve_authors(author_ids)
     listing_refs = _resolve_listing_refs([r["id"] for r in rows])
     attachments = _resolve_attachments([r["id"] for r in rows])
+    link_previews = _resolve_link_previews([r["id"] for r in rows])
     tags = _resolve_tags([r["id"] for r in rows])
     likes = _resolve_likes([r["id"] for r in rows])
     for r in rows:
@@ -962,6 +1008,7 @@ def _recent_posts_across_forums(limit: int = 30) -> list[dict]:
         p.tags = tags.get(p.id, [])
         p.listing_refs = listing_refs.get(p.id, [])
         p.attachments = attachments.get(p.id, [])
+        p.link_previews = link_previews.get(p.id, [])
         p.like_count = likes.get(p.id, 0)
         out.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
     return out
@@ -982,6 +1029,7 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
     from .models import Post
     listing_refs = _resolve_listing_refs([r["id"] for r in rows])
     attachments = _resolve_attachments([r["id"] for r in rows])
+    link_previews = _resolve_link_previews([r["id"] for r in rows])
     tags = _resolve_tags([r["id"] for r in rows])
     likes = _resolve_likes([r["id"] for r in rows])
     out = []
@@ -990,6 +1038,7 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
         p.tags = tags.get(p.id, [])
         p.listing_refs = listing_refs.get(p.id, [])
         p.attachments = attachments.get(p.id, [])
+        p.link_previews = link_previews.get(p.id, [])
         p.like_count = likes.get(p.id, 0)
         out.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
     return out
@@ -1018,6 +1067,29 @@ def _resolve_attachments(post_ids: list[int]) -> dict[int, list]:
     return out
 
 
+def _resolve_link_previews(post_ids: list[int]) -> dict[int, list]:
+    """OGP preview cards (unfurled SUUMO/HOMES links) per post, for the
+    forum-index renderers. The thread view gets these from get_thread."""
+    if not post_ids:
+        return {}
+    conn = connect()
+    try:
+        placeholders = ",".join("?" * len(post_ids))
+        rows = conn.execute(
+            f"""SELECT post_id, url, image_url, title, description, source
+                FROM post_link_previews
+                WHERE post_id IN ({placeholders})
+                ORDER BY id""",
+            post_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[int, list] = {}
+    for r in rows:
+        out.setdefault(r["post_id"], []).append(dict(r))
+    return out
+
+
 def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
     if not post_ids:
         return {}
@@ -1031,6 +1103,22 @@ def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
                 WHERE r.post_id IN ({placeholders})""",
             post_ids,
         ).fetchall()
+        # First raw photo per referenced listing → a card thumbnail. Most rows
+        # (Notion-sourced) have no images, so this stays NULL and the card falls
+        # back to its text-only form.
+        listing_ids = sorted({r["id"] for r in rows})
+        thumbs: dict[int, str] = {}
+        if listing_ids:
+            ph2 = ",".join("?" * len(listing_ids))
+            for ir in conn.execute(
+                f"""SELECT listing_id, MIN(sort_order) AS seq0
+                    FROM listing_images
+                    WHERE kind = 'raw' AND listing_id IN ({ph2})
+                    GROUP BY listing_id""",
+                listing_ids,
+            ).fetchall():
+                seq = int(ir["seq0"] or 0) + 1
+                thumbs[ir["listing_id"]] = f"/listings/img/{ir['listing_id']}/raw/{seq}.jpg"
     finally:
         conn.close()
     out: dict[int, list] = {}
@@ -1038,6 +1126,7 @@ def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
         out.setdefault(r["post_id"], []).append({
             "id": r["id"], "building_name": r["building_name"],
             "layout": r["layout"], "price_man": r["price_man"],
+            "thumbnail": thumbs.get(r["id"]),
         })
     return out
 
@@ -1093,6 +1182,7 @@ def _posts_referencing_listing(listing_id: int, limit: int = 30) -> list[dict]:
     from .models import Post
     listing_refs = _resolve_listing_refs([r["id"] for r in rows])
     attachments = _resolve_attachments([r["id"] for r in rows])
+    link_previews = _resolve_link_previews([r["id"] for r in rows])
     tags = _resolve_tags([r["id"] for r in rows])
     likes = _resolve_likes([r["id"] for r in rows])
     out = []
@@ -1101,6 +1191,7 @@ def _posts_referencing_listing(listing_id: int, limit: int = 30) -> list[dict]:
         p.tags = tags.get(p.id, [])
         p.listing_refs = listing_refs.get(p.id, [])
         p.attachments = attachments.get(p.id, [])
+        p.link_previews = link_previews.get(p.id, [])
         p.like_count = likes.get(p.id, 0)
         out.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
     return out

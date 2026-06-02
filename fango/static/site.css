@@ -558,6 +558,77 @@ a.thread-row:hover .name {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+/* Thumbnail variant: photo flush on the left, text block on the right. Only
+   listings that actually have a raw photo get .has-thumb; the rest keep the
+   text-only card above. */
+.listing-card.has-thumb {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+  padding: 0;
+  overflow: hidden;
+}
+.listing-card.has-thumb .lc-thumb {
+  flex: 0 0 auto;
+  width: 96px;
+  align-self: stretch;
+  object-fit: cover;
+  background: var(--bg-hover);
+}
+.listing-card.has-thumb .lc-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4) var(--space-3) 0;
+}
+.listing-card.has-thumb .lc-head { margin-bottom: 4px; }
+
+/* OGP link-preview card — an unfurled external listing link (SUUMO/HOMES)
+   with a self-hosted og:image. Same shell as .listing-card.has-thumb. */
+.link-preview-card {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  margin-top: var(--space-3);
+  overflow: hidden;
+  background: var(--bg-elevated);
+  color: var(--ink);
+  transition: background-color var(--row-hover), border-color var(--row-hover);
+}
+.link-preview-card:hover { background: var(--bg-hover); border-color: var(--ink-muted); text-decoration: none; }
+.link-preview-card .lp-thumb {
+  flex: 0 0 auto;
+  width: 120px;
+  align-self: stretch;
+  object-fit: cover;
+  background: var(--bg-hover);
+}
+.link-preview-card .lp-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.link-preview-card .lp-title {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.link-preview-card .lp-source {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
 
 /* === Right rail ========================================================== */
 .rail-section {

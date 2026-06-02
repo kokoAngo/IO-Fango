@@ -144,6 +144,7 @@ def record_turn(
         )
 
         if results and results.get("items"):
+            from ..listings import enrich as _enrich
             for item in results["items"][:_MAX_ATTACHED]:
                 lid = item.get("id")
                 if lid is None:
@@ -152,6 +153,10 @@ def record_turn(
                     forum_core.attach_listing(a_post.id, int(lid), conn=conn)
                 except forum_core.ForumError:
                     continue
+                # Image-less listing → try to attach a SUUMO/HOMES OGP preview.
+                # Best-effort; a no-op unless FANGO_EXTERNAL_LOOKUP_ENABLED.
+                if not item.get("thumbnail_url"):
+                    _enrich.enrich_post_with_listing_link(a_post.id, item, conn=conn)
 
         return {
             "posted": True,
@@ -260,17 +265,23 @@ def record_search(
     items: list[dict[str, Any]] | None,
     keyed_agent_id: int | None,
     ip: str | None,
+    question: str | None = None,
+    compliant: bool | None = None,
     conn=None,
 ) -> dict[str, Any]:
-    """Publish a `fango_search_listings` call as an anonymous forum post.
+    """Publish a free-text/structured search to the forum as a **Q&A pair** —
+    the asker's question post + a FANGO answer post — so it reads like a
+    consult conversation rather than a one-line search broadcast.
 
     Best-effort; never raises. Deduped per (caller, criteria) and capped per
     hour. Only the free-text ``keyword`` is LLM-moderated — structured fields are
-    inherently on-topic, so the common case adds no Gemini call.
+    inherently on-topic, so the common case adds no Gemini call. ``question`` is
+    the natural-language text to show as the question (e.g. the LLM's display_ja
+    or the raw ``q``); falls back to a criteria-derived sentence.
     """
     try:
         from .. import rate_limit as rl
-        from ..auth import pseudonym, get_or_create_anon_agent_for_ip
+        from ..auth import pseudonym, get_or_create_anon_agent_for_ip, get_or_create_system_agent
 
         crit = {k: v for k, v in (criteria or {}).items() if v not in (None, "")}
         if crit.get("only_listing_ids"):
@@ -289,18 +300,27 @@ def record_search(
         if rl.count_in_scope("search_post_cap", caller, 3600, conn=conn) >= _SEARCH_CAP_PER_HOUR:
             return _skip("hourly cap")
 
+        # A caller that already moderated the whole query (e.g. the REST GET path,
+        # which runs extract_intent and gets a ``compliant`` verdict for free)
+        # passes it in so we don't spend a second Gemini call here.
+        if compliant is False:
+            return {"posted": False, "forum": None, "thread_id": None,
+                    "reason": "内容が基準に合致しません。"}
+
         # Moderate only the free-text keyword (cheap: most searches have none).
+        # Skipped when the caller already supplied a compliant verdict.
         kw = crit.get("keyword")
         if kw:
             from . import pii
             if pii.has_blocking_pii(str(kw)):
                 return {"posted": False, "forum": None, "thread_id": None,
                         "reason": "個人情報が含まれるため公開を控えました。"}
-            from . import engine as _engine
-            mod = _engine.get_engine().moderate(str(kw), forum_hint=_route(crit))
-            if not mod.approved:
-                return {"posted": False, "forum": None, "thread_id": None,
-                        "reason": mod.reason or "キーワードが基準に合致しません。"}
+            if compliant is None:
+                from . import engine as _engine
+                mod = _engine.get_engine().moderate(str(kw), forum_hint=_route(crit))
+                if not mod.approved:
+                    return {"posted": False, "forum": None, "thread_id": None,
+                            "reason": mod.reason or "キーワードが基準に合致しません。"}
 
         if keyed_agent_id:
             author_id = keyed_agent_id
@@ -309,21 +329,37 @@ def record_search(
 
         forum = _route(crit)
         from . import pii
-        body, _ = pii.scrub_for_publish(
-            _render_search(pseudonym(author_id), crit, total, items or [])
+
+        # Question post (asker pseudonym) — natural language, PII-scrubbed.
+        q_text = (question or "").strip() or f"{_criteria_line(crit)} の物件を探しています。"
+        q_body, _ = pii.scrub_for_publish(q_text)
+        _thread, _q = forum_core.create_thread(
+            forum, _title(crit, q_body), q_body, author_id,
+            tags=["search", "auto", "q"], conn=conn,
         )
-        _thread, post = forum_core.create_thread(
-            forum, _search_title(crit), body, author_id,
-            tags=["search", "auto"], conn=conn,
+
+        # FANGO answer post (system narrator) — templated, no extra LLM call.
+        results = {"total": total, "items": items or []}
+        if items:
+            reply = "ご希望の条件に近い物件が見つかりました。気になる物件があれば listing_id をお知らせください。"
+        else:
+            reply = "現在の条件に合う物件が見つかりませんでした。エリアや予算を少し広げてみてください。"
+        a_body, _ = pii.scrub_for_publish(_render_answer(reply, "ready", crit, results, forum))
+        system = get_or_create_system_agent(conn=conn)
+        a_post = forum_core.reply(
+            forum, _thread.id, a_body, system.id, tags=["search", "fango"], conn=conn,
         )
+        from ..listings import enrich as _enrich
         for item in (items or [])[:_MAX_ATTACHED]:
             lid = item.get("id")
             if lid is None:
                 continue
             try:
-                forum_core.attach_listing(post.id, int(lid), conn=conn)
+                forum_core.attach_listing(a_post.id, int(lid), conn=conn)
             except forum_core.ForumError:
                 continue
+            if not item.get("thumbnail_url"):
+                _enrich.enrich_post_with_listing_link(a_post.id, item, conn=conn)
 
         rl.record_event("search_post_dup", crit_key, conn=conn)
         rl.record_event("search_post_cap", caller, conn=conn)
@@ -331,22 +367,6 @@ def record_search(
     except Exception as exc:  # pragma: no cover - best effort
         log.warning("search autopost failed: %s", exc)
         return _skip("internal error")
-
-
-def _search_title(crit: dict[str, Any]) -> str:
-    bits = [crit.get("prefecture"), crit.get("city"), crit.get("station"), crit.get("layout")]
-    label = " ".join(str(b) for b in bits if b) or str(crit.get("keyword") or "物件")
-    return f"検索: {label}"[:80]
-
-
-def _render_search(label: str, crit: dict[str, Any], total: int,
-                   items: list[dict[str, Any]]) -> str:
-    shown = min(len(items or []), _MAX_ATTACHED)
-    tail = f"中 上位{shown}件" if shown else ""
-    return "\n".join([
-        f"🔍 {label} が検索: {_criteria_line(crit)}",
-        f"   ▸ 結果: 全{total}件{tail}",
-    ])
 
 
 # ---------------------------------------------------------------------------

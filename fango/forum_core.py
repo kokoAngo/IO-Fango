@@ -257,6 +257,65 @@ def list_attachments(
             conn.close()
 
 
+def attach_link_preview(
+    post_id: int,
+    url: str,
+    *,
+    image_url: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    source: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> int:
+    """Attach an unfurled external link (OGP preview) to ``post_id``. ``url`` is
+    the source page (e.g. a SUUMO/HOMES listing); ``image_url`` is a self-hosted
+    copy of og:image. Idempotent per (post, url). Returns the row id."""
+    if not (url or "").strip():
+        raise ForumError("link preview url is empty")
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        p = conn.execute("SELECT id FROM posts WHERE id = ?", (post_id,)).fetchone()
+        if p is None:
+            raise ForumError(f"post {post_id} not found")
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO post_link_previews(
+                   post_id, url, image_url, title, description, source)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (post_id, url.strip(), image_url, title, description, source),
+        )
+        if cur.rowcount == 0:
+            row = conn.execute(
+                "SELECT id FROM post_link_previews WHERE post_id = ? AND url = ?",
+                (post_id, url.strip()),
+            ).fetchone()
+            return row["id"] if row else 0
+        return cur.lastrowid
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def list_link_previews(
+    post_id: int, conn: sqlite3.Connection | None = None
+) -> list[dict[str, Any]]:
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        rows = conn.execute(
+            """SELECT id, url, image_url, title, description, source
+               FROM post_link_previews WHERE post_id = ?
+               ORDER BY id""",
+            (post_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def attach_listing(post_id: int, listing_id: int, note: str | None = None,
                    conn: sqlite3.Connection | None = None) -> int:
     owns_conn = conn is None
@@ -405,6 +464,12 @@ def get_thread(
                 for row in conn.execute(
                     "SELECT url, label, sort_order FROM post_attachments "
                     "WHERE post_id = ? ORDER BY sort_order, id", (post.id,),
+                )
+            ]
+            post.link_previews = [
+                dict(row) for row in conn.execute(
+                    "SELECT url, image_url, title, description, source "
+                    "FROM post_link_previews WHERE post_id = ? ORDER BY id", (post.id,),
                 )
             ]
             lc = conn.execute(
