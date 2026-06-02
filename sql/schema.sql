@@ -247,26 +247,27 @@ CREATE VIRTUAL TABLE IF NOT EXISTS listings_fts USING fts5(
     building_name,
     address,
     station,
+    station_line,
     content='listings',
     content_rowid='id',
     tokenize="trigram"
 );
 
 CREATE TRIGGER IF NOT EXISTS listings_ai AFTER INSERT ON listings BEGIN
-    INSERT INTO listings_fts(rowid, building_name, address, station)
-    VALUES (new.id, COALESCE(new.building_name,''), COALESCE(new.address,''), COALESCE(new.station,''));
+    INSERT INTO listings_fts(rowid, building_name, address, station, station_line)
+    VALUES (new.id, COALESCE(new.building_name,''), COALESCE(new.address,''), COALESCE(new.station,''), COALESCE(new.station_line,''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS listings_ad AFTER DELETE ON listings BEGIN
-    INSERT INTO listings_fts(listings_fts, rowid, building_name, address, station)
-    VALUES('delete', old.id, COALESCE(old.building_name,''), COALESCE(old.address,''), COALESCE(old.station,''));
+    INSERT INTO listings_fts(listings_fts, rowid, building_name, address, station, station_line)
+    VALUES('delete', old.id, COALESCE(old.building_name,''), COALESCE(old.address,''), COALESCE(old.station,''), COALESCE(old.station_line,''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS listings_au AFTER UPDATE ON listings BEGIN
-    INSERT INTO listings_fts(listings_fts, rowid, building_name, address, station)
-    VALUES('delete', old.id, COALESCE(old.building_name,''), COALESCE(old.address,''), COALESCE(old.station,''));
-    INSERT INTO listings_fts(rowid, building_name, address, station)
-    VALUES (new.id, COALESCE(new.building_name,''), COALESCE(new.address,''), COALESCE(new.station,''));
+    INSERT INTO listings_fts(listings_fts, rowid, building_name, address, station, station_line)
+    VALUES('delete', old.id, COALESCE(old.building_name,''), COALESCE(old.address,''), COALESCE(old.station,''), COALESCE(old.station_line,''));
+    INSERT INTO listings_fts(rowid, building_name, address, station, station_line)
+    VALUES (new.id, COALESCE(new.building_name,''), COALESCE(new.address,''), COALESCE(new.station,''), COALESCE(new.station_line,''));
 END;
 
 -- ============================================================================
@@ -373,9 +374,10 @@ CREATE INDEX IF NOT EXISTS idx_consult_messages_session
 CREATE TABLE IF NOT EXISTS consult_active_thread (
     agent_id   INTEGER NOT NULL,   -- caller identity (keyed agent id or per-IP anon id)
     forum      TEXT NOT NULL,
+    area_key   TEXT NOT NULL DEFAULT '',  -- normalised ward/city; same area ⇒ same thread
     thread_id  INTEGER NOT NULL,
     last_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    PRIMARY KEY (agent_id, forum)
+    PRIMARY KEY (agent_id, forum, area_key)
 );
 
 -- ============================================================================

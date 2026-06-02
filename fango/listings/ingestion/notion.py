@@ -5,13 +5,19 @@ If unconfigured, iter_listings() yields nothing — the rest of the system still
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any, Iterator
 
 from ...config import load_settings
 from .base import ListingAdapter
 
 log = logging.getLogger(__name__)
+
+# Only listings explicitly cleared for advertising are ingested — the 「広告可」
+# column. Everything else (不可 / 確認待ち / -- / empty) is skipped for compliance.
+ADVERTISABLE = {"可", "おすすめ"}
 
 
 class NotionListingAdapter(ListingAdapter):
@@ -64,49 +70,94 @@ class NotionListingAdapter(ListingAdapter):
                 cursor = data.get("next_cursor")
 
 
-def _page_to_record(page: dict[str, Any]) -> dict[str, Any] | None:
-    """Best-effort Notion page → listing payload mapping.
+def _num(s: Any) -> float | None:
+    """First numeric value in a string like '57.30', '7,000円', '17.8万円'."""
+    if s is None:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", str(s).replace(",", ""))
+    return float(m.group()) if m else None
 
-    The exact property names depend on the user's Notion database, so we only
-    pull the common ones and let the rest live in raw_json.
+
+def _intf(s: Any) -> int | None:
+    n = _num(s)
+    return int(round(n)) if n is not None else None
+
+
+def _split_address(addr: str | None) -> tuple[str | None, str | None]:
+    """'東京都武蔵野市境３丁目' → ('東京都', '武蔵野市')."""
+    if not addr:
+        return None, None
+    m = re.match(r"\s*(.+?[都道府県])(.*)", addr)
+    if not m:
+        return None, None
+    pref, rest = m.group(1), m.group(2)
+    m2 = re.match(r"(.+?[市区町村])", rest)
+    return pref, (m2.group(1) if m2 else None)
+
+
+def _split_station(s: str | None) -> tuple[str | None, str | None]:
+    """'中央線　武蔵境' → ('中央線', '武蔵境')."""
+    if not s:
+        return None, None
+    parts = [p for p in re.split(r"[\s　/・]+", s.strip()) if p]
+    if len(parts) >= 2:
+        return parts[0], parts[-1]
+    return (None, parts[0]) if parts else (None, None)
+
+
+def _page_to_record(page: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a 「新着物件DB」 Notion page → a listings payload (rental data).
+
+    Returns None for listings that are NOT cleared for advertising (広告可).
     """
     props = page.get("properties") or {}
 
-    def _plain(name: str) -> str | None:
+    def t(name: str) -> str | None:
         prop = props.get(name)
         if not prop:
             return None
         for key in ("title", "rich_text"):
             arr = prop.get(key)
             if isinstance(arr, list) and arr:
-                return "".join(p.get("plain_text", "") for p in arr) or None
-        if prop.get("type") == "url":
-            return prop.get("url")
+                return "".join(p.get("plain_text", "") for p in arr).strip() or None
         if prop.get("type") == "select":
             sel = prop.get("select")
             return sel.get("name") if sel else None
+        if prop.get("type") == "url":
+            return prop.get("url")
         return None
 
-    def _number(name: str) -> float | None:
-        prop = props.get(name)
-        if not prop:
-            return None
-        n = prop.get("number")
-        return n
+    # Compliance gate: only advertise listings explicitly marked OK.
+    if t("広告可") not in ADVERTISABLE:
+        return None
 
-    import json as _json
+    pref, city = _split_address(t("所在地"))
+    line, station = _split_station(t("沿線駅"))
+    rent_man = _num(t("賃料（万円）"))
+    built = t("築年月") or ""
+    built_year = int(built[:4]) if built[:4].isdigit() else None
+
     return {
-        "reins_id": _plain("REINS_ID") or page["id"],
-        "title": _plain("Title") or _plain("Name"),
-        "building_name": _plain("Building"),
-        "address": _plain("Address"),
-        "prefecture": _plain("Prefecture"),
-        "city": _plain("City"),
-        "station": _plain("Station"),
-        "layout": _plain("Layout"),
-        "area_sqm": _number("Area"),
-        "price_man": int(_number("Price") or 0) or None,
-        "built_year": int(_number("Built") or 0) or None,
-        "url": _plain("URL"),
-        "raw_json": _json.dumps(page, ensure_ascii=False),
+        "reins_id": t("REINS_ID") or page["id"],
+        "building_name": t("建物名"),
+        "address": t("所在地"),
+        "prefecture": pref,
+        "city": city,
+        "station": station,
+        "station_line": line,
+        "walk_minutes": _intf(t("徒歩(分)")),
+        "layout": t("間取"),
+        "area_sqm": _num(t("使用部分面積（m2）")),
+        "rent_yen": int(round(rent_man * 10000)) if rent_man else None,
+        "deposit_text": t("敷金"),
+        "key_money_text": t("礼金"),
+        "maintenance_fee_yen": _intf(t("共益費（円）")) or _intf(t("管理費（円）")),
+        "floor": _intf(t("所在階")),
+        "built_year": built_year,
+        "structure": t("物件種目"),
+        "agent_company": t("商号"),
+        "listing_type": "rent",
+        "transaction_type": "rent",
+        "url": None,
+        "raw_json": json.dumps(page, ensure_ascii=False),
     }

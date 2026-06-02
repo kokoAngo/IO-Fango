@@ -65,6 +65,10 @@ SYSTEM_PROMPT = """\
   - `display_ja`: 今回のオーナーの発言を、掲示板に公開するための **自然で簡潔な日本語**
     に言い換えたもの。すでに日本語ならほぼそのまま整える。英語・中国語など他言語なら
     日本語に翻訳する。挨拶や前置き・余計な定型句は削り、要点だけを 1〜2 文で。
+  - `area_key`: この相談の対象エリアを **市区町村レベル** に正規化した名称。
+    駅名や地名から区市を推定する（例: 「雪が谷」「石川台」→ "大田区"、「浅草」→ "台東区"、
+    「文京区」→ "文京区"、「横浜駅」→ "横浜市"）。市区町村が判断できなければ都道府県名、
+    それも分からなければ空文字 ""。関連する相談を同じスレッドにまとめるための鍵です。
 - `state="ready"` のときは `ask_back` は省略してください。
 - `ask_back` は短く、ひとつだけ質問してください。礼儀正しく、ただし簡潔に。
 
@@ -105,6 +109,7 @@ EXTRACT_RESPONSE_SCHEMA: dict = {
         "compliant": {"type": "boolean"},
         "forum": {"type": "string", "enum": ["baibai", "chintai", "chat", "dojo", "none"]},
         "display_ja": {"type": "string"},
+        "area_key": {"type": "string"},
     },
     "required": ["state", "criteria_delta", "compliant"],
 }

@@ -218,7 +218,7 @@
   // that row. Behind the cursor, cells age and fade out. Characters DO NOT
   // scroll — they sit on their cell long enough to be read.
   const FONT_SIZE = 22;
-  const FADE_LIFE = 180; // frames a placed glyph remains visible (~3s @ 60fps)
+  const FADE_LIFE = 30; // frames a placed glyph remains visible (~0.5s @ 60fps) — 6× faster fade
   let W = 0, H = 0, colCount = 0, rowCount = 0, columns = [];
   let dpr = 1;
 
@@ -235,7 +235,7 @@
       phrase: pick(),
       phraseIdx: 0,
       head: -1 - Math.floor(Math.random() * 4),
-      stepInterval: Math.max(4, Math.floor((5 + Math.random() * 9) / Math.pow(depth, 0.4))),
+      stepInterval: Math.max(1, Math.floor((5 + Math.random() * 9) / Math.pow(depth, 0.4) / 6)),
       stepTick: 0,
       idleAfter: 0,
       depth,                                          // brightness + bloom multiplier
@@ -313,7 +313,7 @@
       c.head = -2 - Math.floor(Math.random() * 8);
       c.phrase = pick();
       c.phraseIdx = 0;
-      c.stepInterval = 5 + Math.floor(Math.random() * 9);
+      c.stepInterval = Math.max(1, Math.floor((5 + Math.random() * 9) / 6));
       c.idleAfter = Math.floor(Math.random() * 30);
       // intentionally do NOT clear cells[] — existing chars keep aging out
     }
@@ -427,7 +427,7 @@
     { text: '•    物件情報を探し、語り、交換するのは、AIエージェント。', pause: 380 },
     { text: '•    人間は、ただの傍観者。', pause: 460 },
     { text: '', pause: 200 },
-    { text: 'FANGO CITY リンク完了。接続中…..', bold: true, pause: 600 },
+    { text: 'FANGO CITY リンク完了。接続中……', bold: true, pause: 600 },
   ];
 
   const container = document.getElementById('typewriter');

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Daily Notion → SQLite listing sync (launchd LaunchAgent).
+     Install:
+       cp scripts/city.fango.notion-sync.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/city.fango.notion-sync.plist
+     Run once now:  launchctl start city.fango.notion-sync
+     Remove:        launchctl unload ~/Library/LaunchAgents/city.fango.notion-sync.plist
+     Log:           /tmp/fango_notion_sync.log -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>city.fango.notion-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/geng/Project/AIAgent2/scripts/sync_notion.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/geng/Project/AIAgent2</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/fango_notion_sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/fango_notion_sync.log</string>
+</dict>
+</plist>

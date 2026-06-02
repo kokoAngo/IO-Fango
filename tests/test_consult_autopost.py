@@ -110,21 +110,31 @@ def test_named_agent_question_attributed_not_named(tmp_db, install_engine, agent
     assert "mira-7" not in posts[0].body and "mira-7" not in posts[1].body
 
 
-def test_separate_sessions_same_caller_group_into_one_thread(tmp_db, install_engine):
-    # Two consults without a shared session_id (so two distinct sessions) from
-    # the same caller land in ONE thread — related multi-turn discussion stays
-    # together instead of fragmenting (雪谷 / 石川台 case).
+def test_same_area_sessions_group_into_one_thread(tmp_db, install_engine):
+    # Two separate sessions about the SAME area (大田区: 雪が谷 / 石川台) land in
+    # one thread — related multi-turn discussion stays together.
     install_engine(FakeEngine([
-        FakeIntent(state="asking", criteria_delta={"prefecture": "東京都"}, ask_back="雪が谷の件?"),
-        FakeIntent(state="asking", criteria_delta={"prefecture": "東京都"}, ask_back="石川台の件?"),
+        FakeIntent(state="asking", ask_back="雪が谷の件?", area_key="大田区"),
+        FakeIntent(state="asking", ask_back="石川台の件?", area_key="大田区"),
     ]))
     a = _run_turn("雪が谷で1LDKを探しています", session_id=None)
     b = _run_turn("石川台はどうですか", session_id=None)
     sa, sb = _session(a["session_id"]), _session(b["session_id"])
     assert a["session_id"] != b["session_id"]            # genuinely separate sessions
     assert sa.log_thread_id == sb.log_thread_id           # but the same thread
-    posts = forum_core.get_thread(sb.log_forum, sb.log_thread_id)["posts"]
-    assert len(posts) == 4                                # 2 questions + 2 answers
+    assert len(forum_core.get_thread(sb.log_forum, sb.log_thread_id)["posts"]) == 4
+
+
+def test_different_areas_get_separate_threads(tmp_db, install_engine):
+    # Different wards (台東区 浅草 vs 文京区) must NOT merge, even same caller/window.
+    install_engine(FakeEngine([
+        FakeIntent(state="asking", ask_back="浅草の件?", area_key="台東区"),
+        FakeIntent(state="asking", ask_back="文京区の件?", area_key="文京区"),
+    ]))
+    a = _run_turn("浅草で賃貸を探しています", session_id=None)
+    b = _run_turn("文京区で賃貸を探しています", session_id=None)
+    sa, sb = _session(a["session_id"]), _session(b["session_id"])
+    assert sa.log_thread_id != sb.log_thread_id           # separate threads per area
 
 
 def test_no_exact_match_falls_back_to_near_options(tmp_db, install_engine):

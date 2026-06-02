@@ -57,6 +57,7 @@ def record_turn(
     ip: str | None,
     compliant: bool,
     forum_class: str | None = None,
+    area_key: str = "",
     conn=None,
 ) -> dict[str, Any]:
     """Publish this turn as a Q&A (question post + FANGO answer post). Never raises.
@@ -94,8 +95,9 @@ def record_turn(
         else:
             forum = _route_forum(criteria, forum_class)
             # First post of this session: join the caller's active thread for
-            # this forum if it's still warm, else open a fresh one.
-            thread_id = _active_thread_for(post_author_id, forum, conn)
+            # this forum+area if it's still warm, else open a fresh one. Keying
+            # on area_key keeps 大田区 and 文京区 consults in separate threads.
+            thread_id = _active_thread_for(post_author_id, forum, area_key, conn)
             is_new_thread = thread_id is None
 
         # The thread reads as a real Q&A: each agent question and each FANGO
@@ -118,7 +120,7 @@ def record_turn(
         session.log_forum = forum
         session.log_thread_id = thread_id
         _persist_post_agent(session.id, post_author_id, conn=conn)
-        _set_active_thread(post_author_id, forum, thread_id, conn=conn)
+        _set_active_thread(post_author_id, forum, area_key, thread_id, conn=conn)
 
         # FANGO's answer — authored by the system narrator (FANGO案内).
         system = get_or_create_system_agent(conn=conn)
@@ -157,8 +159,8 @@ def record_turn(
 # Caller → active-thread grouping
 # ---------------------------------------------------------------------------
 
-def _active_thread_for(agent_id: int, forum: str, conn) -> int | None:
-    """The caller's still-warm consult thread for this forum, or None.
+def _active_thread_for(agent_id: int, forum: str, area_key: str, conn) -> int | None:
+    """The caller's still-warm consult thread for this forum+area, or None.
 
     Returns None if there is no mapping, it's gone idle past the window, or the
     thread no longer exists.
@@ -172,8 +174,9 @@ def _active_thread_for(agent_id: int, forum: str, conn) -> int | None:
         conn = connect()
     try:
         row = conn.execute(
-            "SELECT thread_id, last_at FROM consult_active_thread WHERE agent_id = ? AND forum = ?",
-            (agent_id, forum),
+            "SELECT thread_id, last_at FROM consult_active_thread "
+            "WHERE agent_id = ? AND forum = ? AND area_key = ?",
+            (agent_id, forum, area_key or ""),
         ).fetchone()
         if row is None:
             return None
@@ -188,18 +191,18 @@ def _active_thread_for(agent_id: int, forum: str, conn) -> int | None:
             conn.close()
 
 
-def _set_active_thread(agent_id: int, forum: str, thread_id: int, conn) -> None:
+def _set_active_thread(agent_id: int, forum: str, area_key: str, thread_id: int, conn) -> None:
     owns = conn is None
     if conn is None:
         from ..db import connect
         conn = connect()
     try:
         conn.execute(
-            """INSERT INTO consult_active_thread(agent_id, forum, thread_id, last_at)
-               VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-               ON CONFLICT(agent_id, forum) DO UPDATE SET
+            """INSERT INTO consult_active_thread(agent_id, forum, area_key, thread_id, last_at)
+               VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+               ON CONFLICT(agent_id, forum, area_key) DO UPDATE SET
                    thread_id = excluded.thread_id, last_at = excluded.last_at""",
-            (agent_id, forum, thread_id),
+            (agent_id, forum, area_key or "", thread_id),
         )
     finally:
         if owns:

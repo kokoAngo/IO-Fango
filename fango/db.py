@@ -65,6 +65,54 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     # so it is created here (out of schema.sql) to handle the old-DB case.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_rent ON listings(rent_yen)")
     _add_missing_columns(conn, "consult_sessions", _CONSULT_SESSIONS_NEW_COLUMNS)
+    # listings_fts gained a `station_line` column (so keyword search matches line
+    # names like 中央線). FTS5 can't be ALTERed — drop + recreate + rebuild.
+    try:
+        fts_cols = {row["name"] for row in conn.execute("PRAGMA table_info(listings_fts)").fetchall()}
+    except sqlite3.OperationalError:
+        fts_cols = set()
+    if fts_cols and "station_line" not in fts_cols:
+        conn.executescript(
+            """
+            DROP TRIGGER IF EXISTS listings_ai;
+            DROP TRIGGER IF EXISTS listings_ad;
+            DROP TRIGGER IF EXISTS listings_au;
+            DROP TABLE IF EXISTS listings_fts;
+            CREATE VIRTUAL TABLE listings_fts USING fts5(
+                building_name, address, station, station_line,
+                content='listings', content_rowid='id', tokenize="trigram");
+            CREATE TRIGGER listings_ai AFTER INSERT ON listings BEGIN
+                INSERT INTO listings_fts(rowid, building_name, address, station, station_line)
+                VALUES (new.id, COALESCE(new.building_name,''), COALESCE(new.address,''), COALESCE(new.station,''), COALESCE(new.station_line,''));
+            END;
+            CREATE TRIGGER listings_ad AFTER DELETE ON listings BEGIN
+                INSERT INTO listings_fts(listings_fts, rowid, building_name, address, station, station_line)
+                VALUES('delete', old.id, COALESCE(old.building_name,''), COALESCE(old.address,''), COALESCE(old.station,''), COALESCE(old.station_line,''));
+            END;
+            CREATE TRIGGER listings_au AFTER UPDATE ON listings BEGIN
+                INSERT INTO listings_fts(listings_fts, rowid, building_name, address, station, station_line)
+                VALUES('delete', old.id, COALESCE(old.building_name,''), COALESCE(old.address,''), COALESCE(old.station,''), COALESCE(old.station_line,''));
+                INSERT INTO listings_fts(rowid, building_name, address, station, station_line)
+                VALUES (new.id, COALESCE(new.building_name,''), COALESCE(new.address,''), COALESCE(new.station,''), COALESCE(new.station_line,''));
+            END;
+            INSERT INTO listings_fts(listings_fts) VALUES('rebuild');
+            """
+        )
+    # consult_active_thread gained `area_key` in its PRIMARY KEY — ALTER can't
+    # change a PK, so recreate the (ephemeral) grouping table when it's missing.
+    cat_cols = {row["name"] for row in conn.execute("PRAGMA table_info(consult_active_thread)").fetchall()}
+    if cat_cols and "area_key" not in cat_cols:
+        conn.execute("DROP TABLE consult_active_thread")
+        conn.execute(
+            """CREATE TABLE consult_active_thread (
+                   agent_id   INTEGER NOT NULL,
+                   forum      TEXT NOT NULL,
+                   area_key   TEXT NOT NULL DEFAULT '',
+                   thread_id  INTEGER NOT NULL,
+                   last_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                   PRIMARY KEY (agent_id, forum, area_key)
+               )"""
+        )
 
 
 def bootstrap(path: Path | None = None) -> Path:

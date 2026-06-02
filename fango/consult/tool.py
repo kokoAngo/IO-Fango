@@ -207,6 +207,7 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             ip=client_ip_var.get(),
             compliant=intent.compliant,
             forum_class=intent.forum,
+            area_key=intent.area_key,
             conn=conn,
         )
 

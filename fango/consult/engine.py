@@ -47,6 +47,9 @@ class IntentResult:
     # The user's message rephrased in natural Japanese for forum display (posts
     # should read as Japanese even when the agent asked in another language).
     display_ja: str | None = None
+    # Normalised ward/city for this query — the grouping key so consults about
+    # the same area land in one thread (大田区 vs 文京区 don't merge).
+    area_key: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -318,6 +321,8 @@ def _parse_intent(raw_text: str, usage: Any) -> IntentResult:
         forum = None
     display_ja = parsed.get("display_ja")
     display_ja = str(display_ja).strip() if display_ja else None
+    area_key = parsed.get("area_key")
+    area_key = str(area_key).strip() if area_key else ""
     return IntentResult(
         state=state,
         criteria_delta=delta,
@@ -326,6 +331,7 @@ def _parse_intent(raw_text: str, usage: Any) -> IntentResult:
         compliant=compliant,
         forum=forum,
         display_ja=display_ja,
+        area_key=area_key,
         input_tokens=_get_usage(usage, "prompt_token_count"),
         output_tokens=_get_usage(usage, "candidates_token_count"),
     )

@@ -25,6 +25,7 @@ class FakeIntent:
     compliant: bool = True
     forum: str | None = None
     display_ja: str | None = None
+    area_key: str = ""
     input_tokens: int = 100
     output_tokens: int = 50
 
