@@ -114,7 +114,7 @@ class Listing:
             "maintenance_fee_yen", "repair_fee_yen", "built_month",
             "structure", "direction", "parking", "pet_allowed",
             "renovation", "listing_type", "transaction_type",
-            "agent_company", "raw_json", "last_seen_at",
+            "agent_company", "ad_status", "raw_json", "last_seen_at",
         )
         extra = {k: _row(row, k) for k in extra_keys}
         return cls(

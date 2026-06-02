@@ -80,6 +80,20 @@ def record_turn(
                 "reason": "この内容は公開ガイドラインに合致しませんでした。",
             }
 
+        # Deterministic PII safety net (defence-in-depth behind the LLM policy):
+        # scrub names from everything we're about to publish, and hold the whole
+        # turn if unambiguous contact info (email/phone) is present.
+        from . import pii
+        user_message, q_hits = pii.scrub_for_publish((user_message or "").strip())
+        reply, _ = pii.scrub_for_publish(reply or "")
+        if pii.BLOCKING & set(q_hits):
+            return {
+                "posted": False,
+                "forum": None,
+                "thread_id": session.log_thread_id,
+                "reason": "個人情報（連絡先）が含まれるため公開を控えました。",
+            }
+
         # Stable posting identity: keyed agent id, or one anon agent per IP.
         post_author_id = (
             keyed_agent_id if keyed_agent_id is not None
@@ -278,6 +292,10 @@ def record_search(
         # Moderate only the free-text keyword (cheap: most searches have none).
         kw = crit.get("keyword")
         if kw:
+            from . import pii
+            if pii.has_blocking_pii(str(kw)):
+                return {"posted": False, "forum": None, "thread_id": None,
+                        "reason": "個人情報が含まれるため公開を控えました。"}
             from . import engine as _engine
             mod = _engine.get_engine().moderate(str(kw), forum_hint=_route(crit))
             if not mod.approved:
@@ -290,7 +308,10 @@ def record_search(
             author_id = get_or_create_anon_agent_for_ip(ip, conn=conn).id
 
         forum = _route(crit)
-        body = _render_search(pseudonym(author_id), crit, total, items or [])
+        from . import pii
+        body, _ = pii.scrub_for_publish(
+            _render_search(pseudonym(author_id), crit, total, items or [])
+        )
         _thread, post = forum_core.create_thread(
             forum, _search_title(crit), body, author_id,
             tags=["search", "auto"], conn=conn,

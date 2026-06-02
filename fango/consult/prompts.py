@@ -6,6 +6,22 @@ prefix that Gemini implicit caching can recognise across turns.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+# Personal-information non-disclosure policy. Loaded from a standalone Markdown
+# file (``pii_policy.md``) so it can be reviewed/edited on its own and is fed
+# verbatim to Gemini in BOTH the intent-extraction and moderation prompts. Every
+# consult turn is published to a public forum, so display_ja must be scrubbed of
+# PII and the moderation gate must reject anything that can't be made safe.
+_PII_POLICY_PATH = Path(__file__).resolve().parent / "pii_policy.md"
+try:
+    PII_POLICY = _PII_POLICY_PATH.read_text(encoding="utf-8").strip()
+except OSError:  # pragma: no cover - the file ships with the package
+    PII_POLICY = (
+        "公開投稿に氏名・連絡先・具体的住所・所属・各種番号などの個人情報を含めないこと。"
+        "display_ja からは個人情報を除去し、安全化できない場合は compliant=false にする。"
+    )
+
 # ---------------------------------------------------------------------------
 # System prompt (the static prefix, designed to be cached implicitly)
 # ---------------------------------------------------------------------------
@@ -47,8 +63,11 @@ SYSTEM_PROMPT = """\
 
 # 公開判定（モデレーション・板分け）
 この相談はそのまま公開フォーラムに掲載されます。意図抽出と同時に次も判定してください:
-- `compliant`: 内容が合法・健全なら true。違法行為・差別・嫌がらせ・個人情報の暴露・
+- `compliant`: 内容が合法・健全なら true。違法行為・差別・嫌がらせ・
   なりすまし・不動産と無関係なスパム/宣伝・荒らしなら false。
+  個人情報については後述の「個人情報の非公開ポリシー」に従う。氏名・所属・具体住所は
+  `display_ja` から除去すれば true にしてよい。連絡先（メール/電話/SNS）や公的・金融番号が
+  含まれ、安全化できない場合は false。
 - `forum`: 内容に最も合う板を 1 つ。"chintai"(賃貸) / "baibai"(売買) /
   "chat"(雑談・ツッコミ) / "dojo"(住まいに関する議論)。どれにも合わなければ "none"。
   通常の住まい探しは、賃貸なら "chintai"、購入なら "baibai"。
@@ -65,6 +84,9 @@ SYSTEM_PROMPT = """\
   - `display_ja`: 今回のオーナーの発言を、掲示板に公開するための **自然で簡潔な日本語**
     に言い換えたもの。すでに日本語ならほぼそのまま整える。英語・中国語など他言語なら
     日本語に翻訳する。挨拶や前置き・余計な定型句は削り、要点だけを 1〜2 文で。
+    **【最重要】後述の「個人情報の非公開ポリシー」に従い、氏名・敬称付きの人物名
+    （例「Chris Dai氏向け」「田中様」）・連絡先・具体的住所・所属などの個人情報を
+    display_ja に一切含めないこと。「誰のため」は消し、「何を探すか（条件）」だけ残す。**
   - `area_key`: この相談の対象エリアを **市区町村レベル** に正規化した名称。
     駅名や地名から区市を推定する（例: 「雪が谷」「石川台」→ "大田区"、「浅草」→ "台東区"、
     「文京区」→ "文京区"、「横浜駅」→ "横浜市"）。市区町村が判断できなければ都道府県名、
@@ -78,6 +100,9 @@ SYSTEM_PROMPT = """\
 - 「クライアントを家に招くことが多い」「来客が多い」→ 多少高めの予算、駅近、内廊下設計などを暗黙の重視軸に。
 - 「通勤先 大手町」「通勤先 渋谷」→ その駅・周辺路線の駅を station 候補に入れる。
 """
+
+# Fold the standalone PII policy into the cached system prefix.
+SYSTEM_PROMPT = SYSTEM_PROMPT + "\n\n# 個人情報の非公開ポリシー（公開前に厳格適用）\n" + PII_POLICY
 
 
 # JSON schema for the "extract intent" step.
@@ -127,9 +152,12 @@ MODERATION_PROMPT = """\
 # 判定 1: compliant（合法・コンプライアンス）
 次のいずれかに該当する場合は compliant=false にしてください:
 - 違法行為・差別・ハラスメント・脅迫・性的に露骨な内容
-- 個人情報・連絡先の暴露、なりすまし
+- なりすまし
 - 不動産と無関係な広告・スパム・宣伝・勧誘
 - 明らかな荒らし・無意味な文字列
+- **連絡先（メール/電話/SNS）や公的・金融番号など、除去前提にできない個人情報**
+  （氏名・所属・具体住所のみであれば、それらが投稿本文に残っていないか厳格に確認し、
+  残っている場合は compliant=false。詳細は後述の「個人情報の非公開ポリシー」。）
 
 # 判定 2: forum（振り分け先）
 compliant な場合、内容に最も合う板を 1 つ選びます:
@@ -144,6 +172,9 @@ compliant な場合、内容に最も合う板を 1 つ選びます:
 - forum: "baibai" | "chintai" | "chat" | "dojo" | "none"
 - reason: 判定理由を 1 文で（日本語）。却下時はエージェントに返す説明になります。
 """
+
+# Append the full PII policy so the moderation pass enforces it strictly too.
+MODERATION_PROMPT = MODERATION_PROMPT + "\n\n# 個人情報の非公開ポリシー（厳格適用）\n" + PII_POLICY
 
 
 MODERATION_SCHEMA: dict = {

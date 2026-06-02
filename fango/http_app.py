@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sse_starlette.sse import EventSourceResponse
@@ -114,6 +114,28 @@ def _hot_listings(limit: int = 4) -> list[dict]:
         conn.close()
 
 
+# Search-engine crawler User-Agents we treat specially: they skip the
+# first-visit /intro redirect (so the home content is what gets indexed).
+_SEARCH_BOT_UAS = (
+    "googlebot", "bingbot", "slurp", "duckduckbot", "baiduspider",
+    "yandexbot", "applebot", "google-inspectiontool",
+)
+
+
+def _is_search_bot(request: Request) -> bool:
+    ua = (request.headers.get("user-agent") or "").lower()
+    return any(b in ua for b in _SEARCH_BOT_UAS)
+
+
+def _site_origin(request: Request) -> str:
+    """Absolute origin for canonical / OG / sitemap URLs. Prefers the
+    configured public base URL, else derives it from the request."""
+    s = load_settings()
+    if s.public_base_url:
+        return s.public_base_url.rstrip("/")
+    return f"{request.url.scheme}://{request.url.netloc}"
+
+
 def shared_ctx(request: Request, *, active_forum: str | None = None,
                active_nav: str | None = None) -> dict:
     """Context shared by every SSR page (left nav + right rail data)."""
@@ -125,9 +147,12 @@ def shared_ctx(request: Request, *, active_forum: str | None = None,
         "current_agent": current_agent_var.get(),
         "trending_tags": _trending_tags(),
         "hot_listings": _hot_listings(),
-        # エージェント実況 retired — per-forum live feeds replace it.
-        # "recent_activity": activity.recent(limit=6),
+        # Recent service access (incl. read-only REST/GET calls) — so the
+        # homepage shows the service is being used, even without a forum post.
+        "recent_activity": activity.recent(limit=8),
         "site_stats": _site_stats(),
+        "site_origin": _site_origin(request),
+        "is_bot": _is_search_bot(request),
     }
 
 
@@ -406,6 +431,16 @@ def _build_app() -> FastAPI:
         app.mount("/mcp", mcp_instance.sse_app())
         app.mount("/mcp2", mcp_instance.streamable_http_app())
 
+    # REST/JSON API for non-MCP AIs (GPT etc.) — mirrors the MCP read surface.
+    from .rest_api import api_router, build_actions_openapi
+    app.include_router(api_router)
+
+    @app.get("/api/v1/openapi.json", include_in_schema=False)
+    async def actions_openapi():
+        """Curated OpenAPI 3.1 schema (just the /api/v1 routes, absolute server
+        URL) for pasting into a Custom GPT Action."""
+        return JSONResponse(build_actions_openapi(app))
+
     _register_routes(app)
     return app
 
@@ -442,15 +477,42 @@ def _register_routes(app: FastAPI) -> None:
         })
         return templates.TemplateResponse(request, "home.html", ctx)
 
-    # エージェント実況 stream retired in favour of per-forum live feeds.
-    # To restore: uncomment this route, `recent_activity` in shared_ctx, the
-    # nav item + right-rail widget, and `_record_activity` in mcp_server.py.
-    # @app.get("/activity", response_class=HTMLResponse)
-    # async def activity_feed(request: Request):
-    #     """Public feed of "which agent did what" — one line per MCP tool call."""
-    #     ctx = shared_ctx(request, active_nav="activity")
-    #     ctx.update({"activity": activity.recent(limit=100)})
-    #     return templates.TemplateResponse(request, "activity.html", ctx)
+    @app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
+    async def robots_txt(request: Request):
+        """Crawl policy: index only the home page + the agent skill doc; keep
+        forum threads, listing pages and all API/MCP/onboard surfaces out of
+        search. ``/static/`` is allowed so crawlers can render the home page."""
+        origin = _site_origin(request)
+        body = (
+            "User-agent: *\n"
+            "Disallow: /\n"
+            "Allow: /$\n"
+            "Allow: /static/\n"
+            "Allow: /fangobook/real-estate-search-skill.md\n"
+            "\n"
+            f"Sitemap: {origin}/sitemap.xml\n"
+        )
+        return PlainTextResponse(body, media_type="text/plain; charset=utf-8")
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    async def sitemap_xml(request: Request):
+        origin = _site_origin(request)
+        locs = [f"{origin}/", f"{origin}/fangobook/real-estate-search-skill.md"]
+        urls = "".join(f"<url><loc>{loc}</loc></url>" for loc in locs)
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            f"{urls}</urlset>"
+        )
+        return Response(content=xml, media_type="application/xml")
+
+    @app.get("/activity", response_class=HTMLResponse)
+    async def activity_feed(request: Request):
+        """Public access log — one line per API/tool call (incl. read-only
+        REST GETs), so visitors can see the service is being used."""
+        ctx = shared_ctx(request, active_nav="activity")
+        ctx.update({"activity": activity.recent(limit=100)})
+        return templates.TemplateResponse(request, "activity.html", ctx)
 
     @app.get("/fangobook/real-estate-search-skill.md", response_class=PlainTextResponse)
     async def skill_md(request: Request):
@@ -475,6 +537,30 @@ def _register_routes(app: FastAPI) -> None:
             "/fangobook/real-estate-search-skill.md",
             status_code=308,
         )
+
+    @app.get("/search")
+    async def quick_search_page(request: Request, q: str = "", format: Optional[str] = None):
+        """Free-text listing search at a shareable URL: ``/search?q=渋谷 駅近``.
+
+        Content-negotiated so the *same* URL serves a human who opens it in a
+        browser (HTML) and an AI that fetches it (JSON via ``Accept:
+        application/json`` or ``?format=json``). When there are results, the
+        search is also broadcast to the forum (deduped + capped + PII-scrubbed).
+        Mirrors the JSON-only ``/api/v1/search``."""
+        from .rest_api import api_rate_limit, nl_search
+        accept = request.headers.get("accept", "")
+        want_json = (format == "json") or ("application/json" in accept and "text/html" not in accept)
+        result = {"query": "", "criteria": {}, "total": 0, "items": []}
+        if q.strip():
+            api_rate_limit()  # LLM-backed → rate-limit like the API (429 on abuse)
+            from . import activity
+            activity.record("fango_search_listings", current_agent_var.get(), {"criteria": {"keyword": q}})
+            result = nl_search(q)
+        if want_json:
+            return JSONResponse(result)
+        ctx = shared_ctx(request, active_nav="search")
+        ctx.update({"q": q, "result": result})
+        return templates.TemplateResponse(request, "search_listings.html", ctx)
 
     @app.get("/intro", response_class=HTMLResponse)
     async def landing(request: Request):

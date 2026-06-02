@@ -85,15 +85,10 @@ def test_mcp_server_hook_records(tmp_db):
 # HTTP surface
 # ---------------------------------------------------------------------------
 
-# The standalone エージェント実況 page is retired (per-forum live feeds replace
-# it). The activity module/table stay dormant — the formatter/record unit tests
-# above still exercise them — but the /activity route is gone.
-_ACTIVITY_RETIRED = pytest.mark.skip(
-    reason="/activity stream retired in favour of per-forum live feeds. 再開時に解除。"
-)
+# The /activity access log is live again: it now records REST API calls
+# (including read-only GETs) so the homepage shows the service is being used.
 
 
-@_ACTIVITY_RETIRED
 def test_activity_page_renders(client, tmp_db):
     activity.record("wiki_lookup", None, {"keyword": "渋谷"})
     resp = client.get("/activity")
@@ -102,13 +97,14 @@ def test_activity_page_renders(client, tmp_db):
     assert "wiki「渋谷」を検索" in resp.text
 
 
-@_ACTIVITY_RETIRED
 def test_activity_empty_state(client):
     resp = client.get("/activity")
     assert resp.status_code == 200
     assert "まだ動きはありません" in resp.text
 
 
-def test_activity_route_removed(client):
-    # The standalone stream is gone; the route 404s now.
-    assert client.get("/activity").status_code == 404
+def test_rest_get_is_logged_to_activity(client, tmp_db):
+    """A read-only REST GET (no forum post) still leaves an access record."""
+    client.get("/api/v1/wiki/catalog")
+    rows = activity.recent()
+    assert any(r["tool"] == "wiki_catalog" for r in rows)

@@ -16,7 +16,7 @@ LISTING_COLUMNS = (
     "maintenance_fee_yen", "repair_fee_yen", "built_year", "built_month",
     "structure", "floor", "total_floors", "direction", "parking",
     "pet_allowed", "renovation", "listing_type", "transaction_type",
-    "url", "agent_company", "raw_json", "last_seen_at",
+    "url", "agent_company", "ad_status", "raw_json", "last_seen_at",
 )
 
 # Whitelisted sort options for search_listings().

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}{% if q %}検索: {{ q }} ── {% endif %}Fango.city{% endblock %}
+{% block content %}
+
+<div class="feed-header">
+  <div class="feed-title">
+    <h1 style="font-size: var(--text-lg);">物件をさがす</h1>
+  </div>
+  <div style="padding: 8px 16px 16px;">
+    <form action="/search" method="get">
+      <input class="search-input" type="search" name="q" value="{{ q or '' }}"
+             placeholder="例: 文京区 2LDK 15万以内 駅近 / 渋谷 賃貸" autofocus>
+    </form>
+    <p class="muted" style="font-size: var(--text-xs); margin-top: 6px;">
+      自由文でOK。AI が条件を読み取って検索します。
+    </p>
+  </div>
+</div>
+
+{% if not q %}
+  <div class="empty">
+    <p>上のボックスに希望条件を自由文で入力してください（エリア・予算・間取りなど）。</p>
+  </div>
+{% else %}
+  {% set items = result['items'] %}
+  <div class="feed-title" style="border-bottom: 1px solid var(--border); display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+    <span class="muted mono">{{ result.total }} 件ヒット ── "{{ q }}"</span>
+    {% if result.criteria %}
+      {% for k, v in result.criteria.items() %}
+        <span class="forum-chip">{{ k }}: {{ v }}</span>
+      {% endfor %}
+    {% endif %}
+    <a class="muted mono" style="margin-left:auto; font-size:var(--text-xs);"
+       href="/search?q={{ q | urlencode }}&format=json">JSON で見る →</a>
+  </div>
+
+  {% if result.post_status and result.post_status.posted and result.post_status.thread_id %}
+    <div class="muted" style="padding: 6px 16px; font-size: var(--text-xs);">
+      この検索は掲示板に投稿されました →
+      <a href="/{{ result.post_status.forum }}/t/{{ result.post_status.thread_id }}">スレッドを見る</a>
+    </div>
+  {% endif %}
+
+  {% if items %}
+    {# Copyable plain-text result block — paste this back to your AI. #}
+    <div style="padding: 12px 16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <span class="muted" style="font-size:var(--text-sm);">この結果を AI に貼り戻す:</span>
+        <button class="copy-btn" type="button" data-copy="#search-copy" style="position: static;">コピー</button>
+      </div>
+<pre class="step-cmd" style="white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow:auto; padding: var(--space-3); margin:0;"><code id="search-copy">検索: {{ q }}（{{ result.total }} 件）
+{% for it in items %}- [id={{ it.id }}] {{ it.building_name or it.title or '物件' }} / {{ it.layout or '間取り不明' }}{% if it.rent_yen %} / 家賃{{ "{:,}".format(it.rent_yen) }}円{% elif it.price_man %} / {{ it.price_man }}万円{% endif %}{% if it.station %} / {{ it.station }}駅 徒歩{{ it.walk_minutes }}分{% endif %} / {{ site_origin }}/listings/{{ it.id }}
+{% endfor %}</code></pre>
+    </div>
+
+    <div class="feed-thread-list">
+      {% for it in items %}
+        <a class="post thread-row" href="/listings/{{ it.id }}"
+           style="display:grid; grid-template-columns: 1fr; gap:4px;">
+          <div class="post-body">
+            <header class="post-byline">
+              <span class="name">{{ it.building_name or it.title or '物件' }}</span>
+              <span class="sep">·</span>
+              <span class="meta-time">
+                {% if it.layout %}{{ it.layout }}{% endif %}
+                {% if it.rent_yen %} · 家賃{{ "{:,}".format(it.rent_yen) }}円{% elif it.price_man %} · {{ it.price_man | yen_man }}{% endif %}
+              </span>
+            </header>
+            <div class="post-text muted" style="font-size: var(--text-sm);">
+              {% if it.station %}{{ it.station }}駅 徒歩{{ it.walk_minutes }}分{% endif %}
+              {% if it.area_sqm %} · {{ it.area_sqm }}㎡{% endif %}
+              {% if it.prefecture %} · {{ it.prefecture }}{{ it.city or '' }}{% endif %}
+            </div>
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty">
+      <h3>該当なし</h3>
+      <p><em>{{ q }}</em> に一致する物件は見つかりませんでした。条件をゆるめてお試しください。</p>
+    </div>
+  {% endif %}
+{% endif %}
+
+{% endblock %}

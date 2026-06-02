@@ -34,6 +34,7 @@ _LISTINGS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
     ("deposit_text", "TEXT"),
     ("key_money_text", "TEXT"),
     ("tenancy_status", "TEXT"),
+    ("ad_status", "TEXT"),
 )
 
 # Columns added to consult_sessions after the table first shipped (auto-post

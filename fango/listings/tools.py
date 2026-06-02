@@ -158,6 +158,68 @@ def _img_url(listing_id: int, kind: str, sort_order: int) -> str:
 SEARCH_LISTINGS_ENABLED = False
 
 
+# ---------------------------------------------------------------------------
+# Transport-agnostic payload builders.
+#
+# These hold the listing detail / image logic (dedup + URL building) so both
+# the MCP tools below *and* the REST API (``fango/rest_api.py``) return the
+# exact same shape. They intentionally do NOT enforce read quota — the caller
+# does that (MCP tools via ``_enforce_read_quota``; REST via its own per-request
+# rate-limit dependency) so quota isn't double-counted.
+# ---------------------------------------------------------------------------
+
+def get_listing_payload(listing_id: int, conn=None) -> dict[str, Any] | None:
+    """Full listing detail (transports, images, price history), or None.
+
+    Mirrors the historical ``fango_get_listing`` behaviour: drops the
+    ML-internal ``processed`` image variants and byte/perceptual duplicates,
+    and rewrites image URLs so the on-disk naming never leaks.
+    """
+    bundle = svc.get_listing_with_relations(listing_id, conn=conn)
+    if bundle is None:
+        return None
+    listing = bundle["listing"]
+    visible = [img for img in bundle["images"] if img["kind"] != "processed"]
+    deduped = _dedup_by_content(visible)
+    images_out = [
+        {
+            "kind": img["kind"],
+            "label": img.get("label"),
+            "sort_order": img["sort_order"],
+            "url": _img_url(listing.id, img["kind"], img["sort_order"]),
+        }
+        for img in deduped
+    ]
+    return {
+        "listing": dump(listing),
+        "transports": bundle["transports"],
+        "images": images_out,
+        "price_history": bundle["price_history"],
+    }
+
+
+def get_listing_images_payload(
+    listing_id: int, kind: str | None = None, conn=None,
+) -> list[dict[str, Any]]:
+    """Image URLs for a listing. ``kind`` filters to raw|processed|shuhen;
+    omitted returns user-facing photos only (raw + shuhen)."""
+    if kind is None:
+        rows = svc.get_listing_images(listing_id, conn=conn)
+        rows = [r for r in rows if r["kind"] != "processed"]
+    else:
+        rows = svc.get_listing_images(listing_id, kind=kind, conn=conn)
+    rows = _dedup_by_content(rows)
+    return [
+        {
+            "kind": r["kind"],
+            "label": r.get("label"),
+            "sort_order": r["sort_order"],
+            "url": _img_url(listing_id, r["kind"], r["sort_order"]),
+        }
+        for r in rows
+    ]
+
+
 def register(mcp) -> None:
 
     def fango_search_listings(
@@ -235,30 +297,7 @@ def register(mcp) -> None:
         with ``kind="processed"`` if you really need them.
         """
         _enforce_read_quota()
-        bundle = svc.get_listing_with_relations(listing_id)
-        if bundle is None:
-            return None
-        listing = bundle["listing"]
-        # Drop the ML-internal 'processed' variants AND any byte-identical
-        # duplicates (upstream feeds sometimes ship the same exterior
-        # photo under multiple filenames; owners don't want dupes).
-        visible = [img for img in bundle["images"] if img["kind"] != "processed"]
-        deduped = _dedup_by_content(visible)
-        images_out = [
-            {
-                "kind": img["kind"],
-                "label": img.get("label"),
-                "sort_order": img["sort_order"],
-                "url": _img_url(listing.id, img["kind"], img["sort_order"]),
-            }
-            for img in deduped
-        ]
-        return {
-            "listing": dump(listing),
-            "transports": bundle["transports"],
-            "images": images_out,
-            "price_history": bundle["price_history"],
-        }
+        return get_listing_payload(listing_id)
 
     @mcp.tool()
     def fango_get_listing_images(
@@ -276,20 +315,4 @@ def register(mcp) -> None:
                   explicitly to inspect them.
         """
         _enforce_read_quota()
-        if kind is None:
-            rows = svc.get_listing_images(listing_id)
-            rows = [r for r in rows if r["kind"] != "processed"]
-        else:
-            rows = svc.get_listing_images(listing_id, kind=kind)
-        # Same byte-level dedup as fango_get_listing — drop disk-identical
-        # duplicates so owners don't see the same photo twice.
-        rows = _dedup_by_content(rows)
-        return [
-            {
-                "kind": r["kind"],
-                "label": r.get("label"),
-                "sort_order": r["sort_order"],
-                "url": _img_url(listing_id, r["kind"], r["sort_order"]),
-            }
-            for r in rows
-        ]
+        return get_listing_images_payload(listing_id, kind)

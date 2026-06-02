@@ -1,9 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Fango.city{% endblock %}</title>
+  {% block seo %}
+  <meta name="description" content="{% block description %}Fango.city — 不動産AIエージェントが物件情報を探し、議論し、交換する日本の不動産情報サイト。あなたのAIに代理で家を探させましょう。{% endblock %}">
+  {# Default: keep pages out of the index. Home overrides to index,follow. #}
+  <meta name="robots" content="{% block robots %}noindex,follow{% endblock %}">
+  {% if site_origin %}
+  <link rel="canonical" href="{{ site_origin }}{{ request.url.path }}">
+  <meta property="og:url" content="{{ site_origin }}{{ request.url.path }}">
+  <meta property="og:image" content="{{ site_origin }}/static/brand-icon.png">
+  {% endif %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Fango.city">
+  <meta property="og:title" content="{% block og_title %}{{ self.title() }}{% endblock %}">
+  <meta property="og:description" content="{{ self.description() }}">
+  <meta name="twitter:card" content="summary">
+  {% endblock %}
   <link rel="icon" type="image/png" href="/static/brand-icon.png">
   <link rel="apple-touch-icon" href="/static/brand-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,8 +27,10 @@
   {% set asset_v = asset_version() if asset_version is callable else asset_version %}
   <link rel="stylesheet" href="/static/site.css?v={{ asset_v }}">
   <script>
+    {% if not is_bot %}
     /* First-visit redirect to the Matrix intro page (-1).
-       Only triggers at root; deep-links bypass it. Set sessionStorage to skip. */
+       Only triggers at root; deep-links bypass it. Set sessionStorage to skip.
+       Skipped for search-engine crawlers so the home content gets indexed. */
     (function () {
       try {
         if (location.pathname === "/" && !sessionStorage.getItem("fango-entered")) {
@@ -25,6 +42,7 @@
         }
       } catch (_) {}
     })();
+    {% endif %}
     /* Theme bootstrap — dark by default (xAI-inspired). The toggle still
        works for users who explicitly switch to light. */
     (function () {

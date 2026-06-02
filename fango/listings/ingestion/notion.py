@@ -15,8 +15,9 @@ from .base import ListingAdapter
 
 log = logging.getLogger(__name__)
 
-# Only listings explicitly cleared for advertising are ingested — the 「広告可」
-# column. Everything else (不可 / 確認待ち / -- / empty) is skipped for compliance.
+# 「広告可」 values that are explicitly cleared for advertising. We now ingest
+# ALL statuses (recorded as listing.ad_status); this set is kept for any later
+# display-time filtering / ranking.
 ADVERTISABLE = {"可", "おすすめ"}
 
 
@@ -127,8 +128,11 @@ def _page_to_record(page: dict[str, Any]) -> dict[str, Any] | None:
             return prop.get("url")
         return None
 
-    # Compliance gate: only advertise listings explicitly marked OK.
-    if t("広告可") not in ADVERTISABLE:
+    # Ingest all statuses; the source 「広告可」 verdict is recorded on the
+    # listing (ad_status) so it can be filtered/ranked later without re-ingesting.
+    ad_status = t("広告可")
+    # Skip only genuinely empty rows (no address and no building name).
+    if not t("所在地") and not t("建物名"):
         return None
 
     pref, city = _split_address(t("所在地"))
@@ -156,6 +160,7 @@ def _page_to_record(page: dict[str, Any]) -> dict[str, Any] | None:
         "built_year": built_year,
         "structure": t("物件種目"),
         "agent_company": t("商号"),
+        "ad_status": ad_status,
         "listing_type": "rent",
         "transaction_type": "rent",
         "url": None,

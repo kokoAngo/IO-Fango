@@ -49,7 +49,12 @@ history rather than this file.
 
 ## Before public launch (security / abuse / data)
 
-- [ ] `/robots.txt` Disallow: / — file an explicit "no-crawl" stance.
+- ✅ `/robots.txt` + `/sitemap.xml` — **home-only** index policy: only `/`
+      and the skill.md are crawlable; forums/listings/API stay out. Home is
+      `index,follow` w/ canonical + OG; everything else defaults `noindex`;
+      `/intro` is `noindex` and its redirect is skipped for search bots.
+      NOTE: real search visibility still needs an **owned domain** (ngrok
+      tunnels don't rank) + Google Search Console verification.
 - [ ] **IP rate limit** for read endpoints (SSR `/listings/<id>`, image
       endpoint, `fango_search_listings` / `fango_get_listing` MCP tools).
       ~40 req/h/IP when there's no `X-Agent-Key` / `FANGO_AGENT_KEY`; bypass
