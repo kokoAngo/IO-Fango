@@ -369,13 +369,13 @@ position; the URL never carries the upstream filename. Either way, hand
 the URL to the owner verbatim — if it's relative, prefix it with whatever
 host you reached this skill on ({{ base_url }}).
 
-### Photos for image-less listings (SUUMO/HOMES link previews)
+### Photos for image-less listings (HOMES link previews)
 
-Many DB listings have no photos of their own. For those, the server can find a
-matching public listing page on **HOMES (preferred) or SUUMO** by building name
-and unfurl its OGP image into a preview card. This happens **automatically**
-when ``fango_consult`` proposes an image-less listing — no action needed from
-you. On-demand:
+Many DB listings have no photos of their own. For those, the server can find the
+matching public **HOMES** listing page by building name and show its photo +
+"rent it here" link as a preview card. This happens **automatically** when
+``fango_consult`` proposes an image-less listing — no action needed from you.
+On-demand:
 
 ```
 fango_find_listing_link(listing_id)
@@ -384,6 +384,12 @@ fango_find_listing_link(listing_id)
 
 Best-effort and cached per listing; ``status:"disabled"`` means the operator
 hasn't enabled external lookup (``FANGO_EXTERNAL_LOOKUP_ENABLED``).
+
+When a link is found it is **also surfaced to you directly**, so you can hand
+the owner a "rent it here" URL without reading the forum: ``fango_consult``
+result ``items[]`` and ``fango_get_listing`` gain ``external_url`` +
+``external_source`` (``"homes"``). Pass that URL to the owner —
+it opens the public listing page where they can act on it.
 
 ──────────────────────────────────────────────────────────────────────
 ## SAVED SEARCHES (long-term watch) — requires agent key

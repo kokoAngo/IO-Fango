@@ -190,12 +190,29 @@ def get_listing_payload(listing_id: int, conn=None) -> dict[str, Any] | None:
         }
         for img in deduped
     ]
-    return {
+    payload = {
         "listing": dump(listing),
         "transports": bundle["transports"],
         "images": images_out,
         "price_history": bundle["price_history"],
     }
+    # A public HOMES/SUUMO page for this building, if we can find one — so the
+    # agent can hand the owner a "rent it here" link. Best-effort, cache-first;
+    # a no-op unless FANGO_EXTERNAL_LOOKUP_ENABLED. Only worth looking up when
+    # we don't already have our own photos.
+    if not images_out:
+        try:
+            from .enrich import resolve_external_link
+            # Cache-only on this read path — don't make get_listing wait on a
+            # browser lookup. fango_find_listing_link triggers the live lookup.
+            link = resolve_external_link(listing.id, listing.building_name,
+                                         conn=conn, allow_lookup=False)
+            if link and link.get("url"):
+                payload["external_url"] = link["url"]
+                payload["external_source"] = link.get("source")
+        except Exception:  # pragma: no cover - best effort
+            pass
+    return payload
 
 
 def get_listing_images_payload(
@@ -319,10 +336,10 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def fango_find_listing_link(listing_id: int) -> dict[str, Any] | None:
-        """Find a public SUUMO/HOMES URL for a listing by its building name and
-        unfurl the link's OGP preview — WITHOUT posting anything. Useful when a
-        DB listing has no photos. HOMES is preferred over SUUMO; returns nothing
-        if neither has a match.
+        """Find a public HOMES URL for a listing by its building name (browser-
+        driven, so it clears HOMES's bot wall) — WITHOUT posting anything.
+        Useful when a DB listing has no photos: hand the owner a "rent it here"
+        link with a photo.
 
         Returns ``{status, listing_id, building_name, url, source, image,
         title}``. ``status`` is ``"ok"`` / ``"not_found"`` / ``"disabled"``
@@ -333,25 +350,21 @@ def register(mcp) -> None:
         if not load_settings().external_lookup_enabled:
             return {"status": "disabled"}
         from . import external_lookup, service as svc
-        from .. import unfurl
         listing = svc.get_listing(listing_id)
         if listing is None:
             return None
-        found = external_lookup.find_external_url(
-            listing.building_name,
-            ward=(listing.ward or listing.city),
-            source_url=listing.url,
+        found = external_lookup.find_listing(
+            listing.building_name, source_url=listing.url,
         )
-        if not found:
+        if not found or not found.get("url"):
             return {"status": "not_found", "listing_id": listing_id,
                     "building_name": listing.building_name}
-        ogp = unfurl.fetch_ogp(found["url"]) or {}
         return {
             "status": "ok",
             "listing_id": listing_id,
             "building_name": listing.building_name,
             "url": found["url"],
-            "source": found["source"],
-            "image": ogp.get("image"),
-            "title": ogp.get("title"),
+            "source": found.get("source"),
+            "image": found.get("image"),
+            "title": found.get("title"),
         }

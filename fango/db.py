@@ -43,6 +43,9 @@ _CONSULT_SESSIONS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
     ("log_forum", "TEXT"),
     ("log_thread_id", "INTEGER"),
     ("post_agent_id", "INTEGER"),
+    # Area the mirror thread settled on; lets a mid-session area switch fork a
+    # new thread instead of appending the new ward to the old one.
+    ("log_area_key", "TEXT"),
 )
 
 

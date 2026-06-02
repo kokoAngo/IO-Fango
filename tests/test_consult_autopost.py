@@ -137,6 +137,27 @@ def test_different_areas_get_separate_threads(tmp_db, install_engine):
     assert sa.log_thread_id != sb.log_thread_id           # separate threads per area
 
 
+def test_mid_session_area_switch_forks_thread(tmp_db, install_engine):
+    # Within ONE session, switching wards (杉並区 → 中野区) must fork a new thread
+    # instead of mixing both wards into one — the thread-76 bug. Session
+    # continuity previously won unconditionally and bypassed area routing.
+    install_engine(FakeEngine([
+        FakeIntent(state="asking", ask_back="杉並の件?", area_key="杉並区"),
+        FakeIntent(state="asking", ask_back="中野の件?", area_key="中野区"),
+    ]))
+    a = _run_turn("杉並区で一軒家を探しています", session_id=None)
+    t1 = _session(a["session_id"]).log_thread_id
+    b = _run_turn("中野駅近くの賃貸はどうですか", session_id=a["session_id"])
+    sess = _session(b["session_id"])
+    assert a["session_id"] == b["session_id"]              # genuinely the SAME session
+    t2 = sess.log_thread_id
+    assert t1 and t2 and t1 != t2                          # …yet the ward switch forked
+    assert sess.log_area_key == "中野区"                    # session re-pinned to new ward
+    # Neither thread bleeds into the other: each holds only its own Q+A pair.
+    assert len(forum_core.get_thread("chintai", t1)["posts"]) == 2
+    assert len(forum_core.get_thread("chintai", t2)["posts"]) == 2
+
+
 def test_no_exact_match_falls_back_to_near_options(tmp_db, install_engine):
     # Nothing matches 雪が谷 / 10万円, but loosening (drop station, widen budget)
     # surfaces a near option — we recommend that instead of "no results".

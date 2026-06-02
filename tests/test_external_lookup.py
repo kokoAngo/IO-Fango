@@ -1,105 +1,47 @@
-"""SUUMO/HOMES external-link lookup + OGP unfurl + link-preview rendering.
+"""HOMES external-link lookup + link-preview attach/render/surfacing.
 
-All network is stubbed — these tests never reach the internet.
+The browser lookup (Playwright → HOMES) is stubbed, so these tests never touch
+the network. One live test against real HOMES is included but skipped unless
+FANGO_LIVE_HOMES=1.
 """
 from __future__ import annotations
 
-import base64
+import os
 
 import pytest
 
-from fango import forum_core, unfurl
+from fango import forum_core
 from fango.listings import enrich, external_lookup
 
-# A real 1x1 PNG so the magic-byte sniff in uploads accepts it.
-_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-)
+# What a successful browser lookup returns.
+_FOUND = {
+    "url": "https://www.homes.co.jp/chintai/room/abc123def456/",
+    "source": "homes",
+    "image": "https://image1.homes.jp/smallimg/x.jpg",
+    "title": "GENOVIA南麻布green veil[1K/13.3万円]",
+}
 
 
 # --------------------------------------------------------------------------
-# unfurl: OGP parsing + SSRF guard (pure, no network)
-# --------------------------------------------------------------------------
-class TestUnfurl:
-    def test_parse_ogp_prefers_og_over_title(self):
-        html = (
-            '<meta property="og:image" content="https://img.x/a.jpg">'
-            '<meta property="og:title" content="グランド○○ 2LDK">'
-            "<title>ignored</title>"
-        )
-        out = unfurl.parse_ogp(html, "https://www.homes.co.jp/p/")
-        assert out["image"] == "https://img.x/a.jpg"
-        assert out["title"] == "グランド○○ 2LDK"
-
-    def test_parse_ogp_twitter_and_relative_image(self):
-        html = (
-            '<meta name="twitter:image" content="/img/b.jpg">'
-            "<title>Fallback Title</title>"
-        )
-        out = unfurl.parse_ogp(html, "https://suumo.jp/chintai/x/")
-        assert out["image"] == "https://suumo.jp/img/b.jpg"  # resolved
-        assert out["title"] == "Fallback Title"              # <title> fallback
-
-    def test_parse_ogp_no_image(self):
-        out = unfurl.parse_ogp("<p>nothing</p>", "https://example.com/")
-        assert out["image"] is None
-
-    @pytest.mark.parametrize("url", [
-        "http://127.0.0.1/x", "http://10.0.0.1/", "http://169.254.1.1/",
-        "http://192.168.1.1/", "ftp://example.com/x", "https://",
-    ])
-    def test_ssrf_guard_rejects(self, url):
-        assert unfurl._is_safe_url(url) is False
-
-
-# --------------------------------------------------------------------------
-# external_lookup: detail-link extraction + search (stubbed fetch_html)
+# external_lookup: pure helpers (no browser)
 # --------------------------------------------------------------------------
 class TestExternalLookup:
-    def test_extract_homes_relative(self):
-        html = '<a href="/chintai/room/abc/">A</a><a href="https://www.homes.co.jp/mansion/b-1/">B</a>'
-        url = external_lookup._extract_first_listing(html, "homes", "https://www.homes.co.jp/list/")
-        assert url == "https://www.homes.co.jp/chintai/room/abc/"
+    def test_source_of_url(self):
+        assert external_lookup.source_of_url("https://www.homes.co.jp/chintai/room/x/") == "homes"
+        assert external_lookup.source_of_url("https://suumo.jp/chintai/bc_1/") == "suumo"
+        assert external_lookup.source_of_url("https://example.com/x") is None
 
-    def test_extract_suumo_absolute(self):
-        html = '<a href="https://suumo.jp/chintai/jnc_123/">x</a>'
-        url = external_lookup._extract_first_listing(html, "suumo", "https://suumo.jp/s/")
-        assert url == "https://suumo.jp/chintai/jnc_123/"
-
-    def test_source_url_shortcut(self):
-        out = external_lookup.find_external_url("X", source_url="https://suumo.jp/chintai/jnc_9/")
-        assert out == {"url": "https://suumo.jp/chintai/jnc_9/", "source": "suumo"}
-
-    def test_prefers_homes_over_suumo(self, monkeypatch):
-        def fake_fetch(url):
-            if "homes.co.jp" in url:
-                return '物件グランド東京 <a href="/chintai/room/h1/">x</a>'
-            return '物件グランド東京 <a href="https://suumo.jp/chintai/jnc_1/">y</a>'
-        monkeypatch.setattr(unfurl, "fetch_html", fake_fetch)
-        out = external_lookup.find_external_url("グランド東京")
+    def test_source_url_shortcut_skips_browser(self, monkeypatch):
+        # If we already have a HOMES detail URL, no browser is launched.
+        monkeypatch.setattr(external_lookup, "_run_isolated",
+                            lambda *a, **k: pytest.fail("browser should not run"))
+        out = external_lookup.find_listing("X", source_url="https://www.homes.co.jp/chintai/room/z/")
+        assert out["url"] == "https://www.homes.co.jp/chintai/room/z/"
         assert out["source"] == "homes"
-        assert "homes.co.jp" in out["url"]
 
-    def test_rejects_when_name_absent(self, monkeypatch):
-        # Results page doesn't mention the building → don't trust the link.
-        monkeypatch.setattr(unfurl, "fetch_html",
-                            lambda url: '<a href="/chintai/room/z/">別物件</a>')
-        assert external_lookup.find_external_url("実在しないビル名XYZ") is None
-
-
-# --------------------------------------------------------------------------
-# uploads.save_image_bytes (self-hosting path)
-# --------------------------------------------------------------------------
-class TestSaveImageBytes:
-    def test_dedup(self, tmp_db, tmp_path, monkeypatch):
-        from fango import uploads
-        monkeypatch.setattr(uploads, "UPLOADS_DIR", tmp_path / "up")
-        first = uploads.save_image_bytes(_PNG)
-        assert first["url"].startswith("/uploads/") and first["url"].endswith(".png")
-        assert first["reused"] is False
-        second = uploads.save_image_bytes(_PNG)
-        assert second["sha256"] == first["sha256"]
-        assert second["reused"] is True
+    def test_norm_folds_fullwidth(self):
+        # 'Fiore' (ascii) and 'Ｆｉｏｒｅ' (full-width) compare equal.
+        assert external_lookup._norm("Fiore南麻布") == external_lookup._norm("Ｆｉｏｒｅ南麻布　")
 
 
 # --------------------------------------------------------------------------
@@ -118,82 +60,118 @@ class TestAttachLinkPreview:
         _, post_id = a_post
         pid = forum_core.attach_link_preview(
             post_id, "https://www.homes.co.jp/x/",
-            image_url="/uploads/abc.png", title="物件A", source="homes",
+            image_url="https://image1.homes.jp/p.jpg", title="物件A", source="homes",
         )
         assert pid > 0
         again = forum_core.attach_link_preview(post_id, "https://www.homes.co.jp/x/")
         assert again == pid  # idempotent per (post, url)
         rows = forum_core.list_link_previews(post_id)
         assert len(rows) == 1
-        assert rows[0]["image_url"] == "/uploads/abc.png"
+        assert rows[0]["image_url"] == "https://image1.homes.jp/p.jpg"
         assert rows[0]["source"] == "homes"
 
     def test_get_thread_exposes_link_previews(self, a_post):
         from fango.baibai import service as bb
         thread_id, post_id = a_post
-        forum_core.attach_link_preview(post_id, "https://suumo.jp/chintai/jnc_1/",
-                                       image_url="/uploads/x.png", title="T", source="suumo")
+        forum_core.attach_link_preview(post_id, "https://www.homes.co.jp/r/",
+                                       image_url="https://image1.homes.jp/x.jpg", title="T", source="homes")
         data = bb.get_thread(thread_id)
         first = data["posts"][0]
         assert getattr(first, "link_previews", None)
-        assert first.link_previews[0]["url"] == "https://suumo.jp/chintai/jnc_1/"
+        assert first.link_previews[0]["url"] == "https://www.homes.co.jp/r/"
 
 
 # --------------------------------------------------------------------------
-# enrich: end-to-end orchestration (kill-switch, cache, attach)
+# enrich: orchestration (kill-switch, browser-lookup stub, cache, attach)
 # --------------------------------------------------------------------------
+def _stub_find(monkeypatch, *, found, calls=None):
+    def fake(name, **kw):
+        if calls is not None:
+            calls.append(name)
+        return found
+    monkeypatch.setattr(external_lookup, "find_listing", fake)
+
+
 class TestEnrich:
-    def _wire(self, monkeypatch, *, found, calls=None):
-        def fake_find(name, **kw):
-            if calls is not None:
-                calls.append(name)
-            return found
-        monkeypatch.setattr(external_lookup, "find_external_url", fake_find)
-        monkeypatch.setattr(unfurl, "fetch_ogp",
-                            lambda url: {"image": "https://img/x.jpg", "title": "OGP T"})
-        monkeypatch.setattr(enrich, "_self_host_image", lambda u: "/uploads/hosted.png")
-
     def test_disabled_is_noop(self, a_post, monkeypatch):
         _, post_id = a_post
         monkeypatch.delenv("FANGO_EXTERNAL_LOOKUP_ENABLED", raising=False)
-        # Even if lookup would succeed, the kill-switch short-circuits.
-        self._wire(monkeypatch, found={"url": "https://www.homes.co.jp/x/", "source": "homes"})
+        _stub_find(monkeypatch, found=_FOUND)  # would succeed, but kill-switch wins
         assert enrich.enrich_post_with_listing_link(post_id, {"id": 999, "building_name": "X"}) is None
         assert forum_core.list_link_previews(post_id) == []
 
     def test_attaches_and_caches(self, a_post, listing_factory, monkeypatch):
         _, post_id = a_post
         monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
-        listing = listing_factory(building_name="グランド東京", url=None)
+        listing = listing_factory(building_name="GENOVIA南麻布", url=None)
         calls: list = []
-        self._wire(monkeypatch, found={"url": "https://www.homes.co.jp/x/", "source": "homes"}, calls=calls)
+        _stub_find(monkeypatch, found=_FOUND, calls=calls)
 
-        out = enrich.enrich_post_with_listing_link(post_id, {"id": listing.id, "building_name": "グランド東京"})
+        out = enrich.enrich_post_with_listing_link(post_id, {"id": listing.id, "building_name": "GENOVIA南麻布"})
         assert out["attached"] is True
         previews = forum_core.list_link_previews(post_id)
-        assert previews[0]["image_url"] == "/uploads/hosted.png"
+        assert previews[0]["url"] == _FOUND["url"]
+        assert previews[0]["image_url"] == _FOUND["image"]   # HOMES image hotlinked
         assert previews[0]["source"] == "homes"
         assert len(calls) == 1
 
-        # Second call (different post, same listing) hits the cache — no re-lookup.
-        from fango.baibai import service as bb
-        ag2 = listing  # reuse db; make a second post
+        # Second call, same listing → cache hit, no second browser lookup.
         out2 = enrich.enrich_post_with_listing_link(post_id, {"id": listing.id})
         assert out2["cached"] is True
-        assert len(calls) == 1  # find_external_url NOT called again
+        assert len(calls) == 1
 
     def test_negative_result_cached(self, a_post, listing_factory, monkeypatch):
         _, post_id = a_post
         monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
         listing = listing_factory(building_name="ナイショ", url=None)
         calls: list = []
-        self._wire(monkeypatch, found=None, calls=calls)
+        _stub_find(monkeypatch, found=None, calls=calls)
         out = enrich.enrich_post_with_listing_link(post_id, {"id": listing.id, "building_name": "ナイショ"})
         assert out["attached"] is False
         assert forum_core.list_link_previews(post_id) == []
-        # Negative cached → no second lookup.
         enrich.enrich_post_with_listing_link(post_id, {"id": listing.id, "building_name": "ナイショ"})
-        assert len(calls) == 1
+        assert len(calls) == 1  # negative cached → no re-lookup
+
+
+# --------------------------------------------------------------------------
+# The discovered link is surfaced to the agent (consult results + get_listing)
+# --------------------------------------------------------------------------
+class TestSurfacing:
+    def test_resolve_disabled_returns_none(self, tmp_db, listing_factory, monkeypatch):
+        monkeypatch.delenv("FANGO_EXTERNAL_LOOKUP_ENABLED", raising=False)
+        listing = listing_factory(building_name="X")
+        assert enrich.resolve_external_link(listing.id, "X") is None
+
+    def test_resolve_returns_link(self, tmp_db, listing_factory, monkeypatch):
+        monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
+        _stub_find(monkeypatch, found=_FOUND)
+        listing = listing_factory(building_name="GENOVIA南麻布", url=None)
+        link = enrich.resolve_external_link(listing.id, "GENOVIA南麻布")
+        assert link["url"] == _FOUND["url"]
+        assert link["source"] == "homes"
+        assert link["image_url"] == _FOUND["image"]
+        assert link["title"] == _FOUND["title"]
+
+    def test_get_listing_payload_includes_cached_external_url(self, tmp_db, listing_factory, monkeypatch):
+        from fango.listings.tools import get_listing_payload
+        monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
+        _stub_find(monkeypatch, found=_FOUND)
+        listing = listing_factory(building_name="GENOVIA南麻布", url=None)  # no images
+        # get_listing is cache-only (no inline browser). Warm the cache first.
+        enrich.resolve_external_link(listing.id, "GENOVIA南麻布")
+        payload = get_listing_payload(listing.id)
+        assert payload["external_url"] == _FOUND["url"]
+        assert payload["external_source"] == "homes"
+
+    def test_get_listing_payload_no_lookup_when_cold(self, tmp_db, listing_factory, monkeypatch):
+        from fango.listings.tools import get_listing_payload
+        monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
+        # find_listing must NOT be called from the read path (cache-only).
+        monkeypatch.setattr(external_lookup, "find_listing",
+                            lambda *a, **k: pytest.fail("get_listing must stay cache-only"))
+        listing = listing_factory(building_name="未キャッシュ", url=None)
+        payload = get_listing_payload(listing.id)
+        assert "external_url" not in payload
 
 
 # --------------------------------------------------------------------------
@@ -206,11 +184,21 @@ class TestRender:
         out = bb.create_thread(title="t", body="b", author_id=ag.id, agent_created_at=ag.created_at)
         thread_id, post_id = out["thread"].id, out["post"].id
         forum_core.attach_link_preview(
-            post_id, "https://www.homes.co.jp/x/",
-            image_url="/uploads/hosted.png", title="グランド東京 2LDK", source="homes",
+            post_id, _FOUND["url"], image_url=_FOUND["image"],
+            title=_FOUND["title"], source="homes",
         )
         r = client.get(f"/baibai/t/{thread_id}")
         assert r.status_code == 200
         assert "link-preview-card" in r.text
-        assert "/uploads/hosted.png" in r.text
-        assert "グランド東京 2LDK" in r.text
+        assert _FOUND["image"] in r.text
+        assert "GENOVIA南麻布" in r.text
+
+
+# --------------------------------------------------------------------------
+# Live HOMES (real browser + WAF). Opt-in only.
+# --------------------------------------------------------------------------
+@pytest.mark.skipif(os.environ.get("FANGO_LIVE_HOMES") != "1",
+                    reason="set FANGO_LIVE_HOMES=1 to hit real HOMES via a browser")
+def test_live_homes_lookup():
+    found = external_lookup.find_listing("GENOVIA南麻布")
+    assert found and "homes.co.jp/chintai/room/" in found["url"]

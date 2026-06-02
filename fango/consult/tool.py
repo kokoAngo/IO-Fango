@@ -21,6 +21,32 @@ from . import session as _ss
 
 log = logging.getLogger(__name__)
 
+# Resolve external links for at most this many proposed listings per turn, so a
+# single consult can't fan out into a pile of SUUMO/HOMES fetches.
+_MAX_EXTERNAL_LINKS = 5
+
+
+def _attach_external_links(briefs: list[dict], conn) -> None:
+    """Add ``external_url`` / ``external_source`` (a public HOMES/SUUMO page the
+    owner can rent through) to proposed listings. Best-effort; a no-op unless
+    external lookup is enabled. Cache-first, so repeats are cheap."""
+    try:
+        from ..listings.enrich import resolve_external_link
+    except Exception:  # pragma: no cover
+        return
+    for b in briefs[:_MAX_EXTERNAL_LINKS]:
+        try:
+            # Cache-only: never block the consult reply on a ~10s browser lookup.
+            # The background post-enrichment populates the cache; subsequent
+            # turns/queries then carry the link.
+            link = resolve_external_link(b.get("id"), b.get("building_name"),
+                                         conn=conn, allow_lookup=False)
+        except Exception:  # pragma: no cover - best effort
+            link = None
+        if link and link.get("url"):
+            b["external_url"] = link["url"]
+            b["external_source"] = link.get("source")
+
 
 def register(mcp) -> None:
 
@@ -141,6 +167,7 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
                 except Exception as exc:  # pragma: no cover
                     log.warning("relaxed_search failed: %s", exc)
             briefs = [_listing_brief(r, conn=conn) for r in rows]
+            _attach_external_links(briefs, conn)
             last_assistant = _last_assistant_text(history_for_llm)
             try:
                 summary = engine.summarise_results(

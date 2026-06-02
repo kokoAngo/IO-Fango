@@ -39,6 +39,7 @@ class ConsultSession:
     state: str  # 'asking' | 'ready' | 'done'
     log_forum: str | None = None
     log_thread_id: int | None = None
+    log_area_key: str | None = None
     post_agent_id: int | None = None
 
     @classmethod
@@ -60,6 +61,7 @@ class ConsultSession:
             state=row["state"],
             log_forum=_row_get(row, "log_forum"),
             log_thread_id=_row_get(row, "log_thread_id"),
+            log_area_key=_row_get(row, "log_area_key"),
             post_agent_id=_row_get(row, "post_agent_id"),
         )
 
@@ -254,17 +256,29 @@ def set_log_thread(
     session_id: str,
     forum: str,
     thread_id: int,
+    area_key: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Pin the auto-post mirror thread for this consult session."""
+    """Pin the auto-post mirror thread (and its settled area) for this session.
+
+    ``area_key`` is only written when non-empty, so an early turn that opened the
+    thread before the area was known doesn't clobber the area a later turn set.
+    """
     owns_conn = conn is None
     if conn is None:
         conn = connect()
     try:
-        conn.execute(
-            "UPDATE consult_sessions SET log_forum = ?, log_thread_id = ? WHERE id = ?",
-            (forum, thread_id, session_id),
-        )
+        if area_key:
+            conn.execute(
+                "UPDATE consult_sessions SET log_forum = ?, log_thread_id = ?, "
+                "log_area_key = ? WHERE id = ?",
+                (forum, thread_id, area_key, session_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE consult_sessions SET log_forum = ?, log_thread_id = ? WHERE id = ?",
+                (forum, thread_id, session_id),
+            )
     finally:
         if owns_conn:
             conn.close()

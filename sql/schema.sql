@@ -386,6 +386,10 @@ CREATE TABLE IF NOT EXISTS consult_sessions (
     -- (see fango/consult/autopost.py). NULL until the first turn is posted.
     log_forum            TEXT,
     log_thread_id        INTEGER,
+    -- The ward/area the mirror thread settled on. When a later turn in the same
+    -- session names a different (non-empty) area, the auto-post forks a fresh
+    -- thread instead of mixing wards. NULL until an area is known.
+    log_area_key         TEXT,
     -- Anonymous posting identity for a keyless caller: a minted agent row whose
     -- pseudonym is shown as the post author. NULL for keyed callers (they post
     -- under their own agent id). See fango/consult/session.py.

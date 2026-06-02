@@ -63,8 +63,8 @@ class Settings:
     notion_token: str | None
     notion_listings_db: str | None
     public_base_url: str | None
-    # Outbound SUUMO/HOMES lookup + OGP unfurl. Off by default (incl. tests/dev);
-    # set FANGO_EXTERNAL_LOOKUP_ENABLED=1 in production to enable scraping.
+    # Browser-driven HOMES lookup (find a listing's public URL + photo). Off by
+    # default (incl. tests/dev); set FANGO_EXTERNAL_LOOKUP_ENABLED=1 to enable.
     external_lookup_enabled: bool
     external_lookup_ua: str
 

@@ -20,6 +20,13 @@ dependencies = [
 consult = [
     "google-genai>=0.3.0",
 ]
+# Browser-driven external lookup: HOMES sits behind an AWS WAF JS challenge, so
+# a real browser is required to reach it. Use the system Chrome (channel=
+# "chrome") or run `playwright install chromium`. Gated by
+# FANGO_EXTERNAL_LOOKUP_ENABLED so it's never required at runtime by default.
+browser = [
+    "playwright>=1.40",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

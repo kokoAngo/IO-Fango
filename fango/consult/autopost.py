@@ -30,6 +30,29 @@ log = logging.getLogger(__name__)
 # How many result listings to attach to a 'ready' turn's reply.
 _MAX_ATTACHED = 3
 
+
+def _spawn_enrich(post_id: int, item: dict) -> None:
+    """Fire-and-forget: fetch the listing's HOMES link + photo in a background
+    daemon thread and attach it to ``post_id``. A no-op unless external lookup
+    is enabled. Runs off the request path because the browser lookup is slow;
+    by the time it attaches (~10s later) the post is committed. Best-effort."""
+    from ..config import load_settings
+    if not load_settings().external_lookup_enabled:
+        return
+    import threading
+    data = {"id": item.get("id"), "building_name": item.get("building_name")}
+    if not data["id"]:
+        return
+
+    def _run():
+        try:
+            from ..listings import enrich as _enrich
+            _enrich.enrich_post_with_listing_link(post_id, data)  # own DB connection
+        except Exception as exc:  # pragma: no cover - best effort
+            log.debug("background enrich failed (post %s): %s", post_id, exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+
 # Forum routing.
 _RENTAL_KEYS = ("rent_min_yen", "rent_max_yen")
 _SALE_KEYS = ("price_min_man", "price_max_man", "price_man")
@@ -102,10 +125,18 @@ def record_turn(
 
         # Decide which thread this turn belongs to.
         if session.log_thread_id and session.log_forum:
-            # Continuing this session's thread.
             forum = session.log_forum
-            thread_id = session.log_thread_id
-            is_new_thread = False
+            prev_area = (session.log_area_key or "").strip()
+            if area_key and prev_area and area_key != prev_area:
+                # Mid-session area switch (e.g. 杉並区 → 中野区): fork rather than
+                # mixing two wards into one thread. Join this caller's warm thread
+                # for the new area if any, else open a fresh one.
+                thread_id = _active_thread_for(post_author_id, forum, area_key, conn)
+                is_new_thread = thread_id is None
+            else:
+                # Same area, or area not yet established → keep appending here.
+                thread_id = session.log_thread_id
+                is_new_thread = False
         else:
             forum = _route_forum(criteria, forum_class)
             # First post of this session: join the caller's active thread for
@@ -129,10 +160,13 @@ def record_turn(
                 tags=["consult", "q"], conn=conn,
             )
 
-        # Pin this session to the thread + remember it as the caller's active one.
-        _ss.set_log_thread(session.id, forum, thread_id, conn=conn)
+        # Pin this session to the thread (+ the area it settled on) and remember
+        # it as the caller's active thread for this forum+area.
+        _ss.set_log_thread(session.id, forum, thread_id, area_key=area_key, conn=conn)
         session.log_forum = forum
         session.log_thread_id = thread_id
+        if area_key:
+            session.log_area_key = area_key
         _persist_post_agent(session.id, post_author_id, conn=conn)
         _set_active_thread(post_author_id, forum, area_key, thread_id, conn=conn)
 
@@ -144,7 +178,7 @@ def record_turn(
         )
 
         if results and results.get("items"):
-            from ..listings import enrich as _enrich
+            first_imageless = None
             for item in results["items"][:_MAX_ATTACHED]:
                 lid = item.get("id")
                 if lid is None:
@@ -153,10 +187,13 @@ def record_turn(
                     forum_core.attach_listing(a_post.id, int(lid), conn=conn)
                 except forum_core.ForumError:
                     continue
-                # Image-less listing → try to attach a SUUMO/HOMES OGP preview.
-                # Best-effort; a no-op unless FANGO_EXTERNAL_LOOKUP_ENABLED.
-                if not item.get("thumbnail_url"):
-                    _enrich.enrich_post_with_listing_link(a_post.id, item, conn=conn)
+                if first_imageless is None and not item.get("thumbnail_url"):
+                    first_imageless = item
+            # Image-less listing → fetch its HOMES link + photo in the BACKGROUND
+            # (a ~10s browser lookup) so the consult reply isn't blocked. The
+            # card appears on the thread a few seconds later. One per turn.
+            if first_imageless is not None:
+                _spawn_enrich(a_post.id, first_imageless)
 
         return {
             "posted": True,
@@ -349,7 +386,7 @@ def record_search(
         a_post = forum_core.reply(
             forum, _thread.id, a_body, system.id, tags=["search", "fango"], conn=conn,
         )
-        from ..listings import enrich as _enrich
+        first_imageless = None
         for item in (items or [])[:_MAX_ATTACHED]:
             lid = item.get("id")
             if lid is None:
@@ -358,8 +395,10 @@ def record_search(
                 forum_core.attach_listing(a_post.id, int(lid), conn=conn)
             except forum_core.ForumError:
                 continue
-            if not item.get("thumbnail_url"):
-                _enrich.enrich_post_with_listing_link(a_post.id, item, conn=conn)
+            if first_imageless is None and not item.get("thumbnail_url"):
+                first_imageless = item
+        if first_imageless is not None:
+            _spawn_enrich(a_post.id, first_imageless)
 
         rl.record_event("search_post_dup", crit_key, conn=conn)
         rl.record_event("search_post_cap", caller, conn=conn)

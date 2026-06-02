@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 
 from . import external_lookup
-from .. import forum_core, unfurl
+from .. import forum_core
 from ..config import load_settings
 from ..db import connect
 
@@ -47,38 +47,26 @@ def _write_cache(conn, listing_id: int, *, url, source, image_url, title, status
     )
 
 
-def _self_host_image(image_url: str) -> str | None:
-    """Download an og:image and re-host it via the uploads pipeline. Returns a
-    /uploads/<sha>.ext URL (allowlist-clean), or None on failure."""
-    data = unfurl.fetch_image_bytes(image_url)
-    if not data:
-        return None
-    try:
-        from ..uploads import save_image_bytes
-        return save_image_bytes(data)["url"]
-    except Exception as exc:  # invalid/oversize image, etc.
-        log.debug("self-host og:image failed for %s: %s", image_url, exc)
-        return None
-
-
-def enrich_post_with_listing_link(post_id: int, listing, conn=None) -> dict | None:
-    """Attach an OGP preview (SUUMO/HOMES link + self-hosted image) for
-    ``listing`` to ``post_id``. ``listing`` may be a brief dict (with ``id`` /
-    ``building_name``) or anything with an ``id``. Best-effort; returns a small
-    status dict or None."""
-    settings = load_settings()
-    if not settings.external_lookup_enabled:
-        return None
-
+def _listing_id_of(listing) -> int | None:
     if isinstance(listing, dict):
-        listing_id = listing.get("id")
-        brief_name = listing.get("building_name")
-    else:
-        listing_id = getattr(listing, "id", None)
-        brief_name = getattr(listing, "building_name", None)
-    if not listing_id:
-        return None
+        return listing.get("id")
+    return getattr(listing, "id", None)
 
+
+def resolve_external_link(listing_id: int, building_name: str | None = None,
+                          conn=None, *, allow_lookup: bool = True) -> dict | None:
+    """The external HOMES link for a listing — for surfacing to the agent (so it
+    can hand the customer a "rent it here" URL) and for attaching to a post.
+
+    Cache-first. On a cache miss it performs a gated, rate-limited **browser**
+    lookup (~10s) only when ``allow_lookup`` is True — callers on a latency-
+    sensitive path (read tools, the consult reply) pass ``allow_lookup=False`` to
+    stay cache-only; the background post-enrichment does the actual lookup.
+
+    Returns ``{url, source, image_url, title, cached}`` or None (disabled /
+    not found / negative cache / cache-miss when lookup disallowed). Never raises."""
+    if not load_settings().external_lookup_enabled or not listing_id:
+        return None
     owns = conn is None
     if conn is None:
         conn = connect()
@@ -86,50 +74,77 @@ def enrich_post_with_listing_link(post_id: int, listing, conn=None) -> dict | No
         cached = _fresh_cache(conn, listing_id)
         if cached:
             if cached["status"] == "ok" and cached.get("url"):
-                forum_core.attach_link_preview(
-                    post_id, cached["url"], image_url=cached.get("image_url"),
-                    title=cached.get("title"), source=cached.get("source"), conn=conn,
-                )
-                return {"attached": True, "cached": True, "url": cached["url"]}
-            return {"attached": False, "cached": True, "reason": "negative cache"}
+                return {
+                    "url": cached["url"], "source": cached.get("source"),
+                    "image_url": cached.get("image_url"), "title": cached.get("title"),
+                    "cached": True,
+                }
+            return None  # fresh negative cache → don't re-scrape
+        if not allow_lookup:
+            return None  # cache-only path: don't trigger a slow browser lookup
 
         from ..rate_limit import EXTERNAL_LOOKUP, RateLimitError, check_and_record
         try:
             check_and_record("external_lookup", "global", EXTERNAL_LOOKUP, conn=conn)
         except RateLimitError:
-            return {"attached": False, "reason": "rate limited"}
+            return None
 
         row = conn.execute(
-            "SELECT building_name, ward, city, url FROM listings WHERE id = ?",
+            "SELECT building_name, url FROM listings WHERE id = ?",
             (listing_id,),
         ).fetchone()
-        building_name = brief_name or (row["building_name"] if row else None)
-        ward = (row["ward"] or row["city"]) if row else None
+        name = building_name or (row["building_name"] if row else None)
         source_url = row["url"] if row else None
-        if not building_name:
+        if not name:
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
-            return {"attached": False, "reason": "no building name"}
+            return None
 
-        found = external_lookup.find_external_url(
-            building_name, ward=ward, source_url=source_url,
-        )
-        if not found:
+        # One browser session returns url + og:image + og:title together
+        # (HOMES is WAF-walled, so we can't refetch with httpx). We hotlink the
+        # HOMES image rather than self-host it.
+        found = external_lookup.find_listing(name, source_url=source_url)
+        if not found or not found.get("url"):
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
-            return {"attached": False, "reason": "no external url"}
+            return None
+        _write_cache(conn, listing_id, url=found["url"], source=found.get("source"),
+                     image_url=found.get("image"), title=found.get("title"), status="ok")
+        return {"url": found["url"], "source": found.get("source"),
+                "image_url": found.get("image"), "title": found.get("title"),
+                "cached": False}
+    except Exception as exc:  # pragma: no cover - best effort
+        log.warning("external-link resolve failed (listing %s): %s", listing_id, exc)
+        return None
+    finally:
+        if owns:
+            conn.close()
 
-        ogp = unfurl.fetch_ogp(found["url"])
-        title = ogp.get("title") if ogp else None
-        image_url = _self_host_image(ogp["image"]) if (ogp and ogp.get("image")) else None
 
+def enrich_post_with_listing_link(post_id: int, listing, conn=None) -> dict | None:
+    """Attach an OGP preview (SUUMO/HOMES link + self-hosted image) for
+    ``listing`` to ``post_id``. ``listing`` may be a brief dict (with ``id`` /
+    ``building_name``) or anything with an ``id``. Best-effort; returns a small
+    status dict or None (disabled)."""
+    if not load_settings().external_lookup_enabled:
+        return None
+    listing_id = _listing_id_of(listing)
+    if not listing_id:
+        return None
+    brief_name = listing.get("building_name") if isinstance(listing, dict) else None
+    owns = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        link = resolve_external_link(listing_id, brief_name, conn=conn)
+        if not link:
+            return {"attached": False, "reason": "no external link"}
         forum_core.attach_link_preview(
-            post_id, found["url"], image_url=image_url, title=title,
-            source=found["source"], conn=conn,
+            post_id, link["url"], image_url=link.get("image_url"),
+            title=link.get("title"), source=link.get("source"), conn=conn,
         )
-        _write_cache(conn, listing_id, url=found["url"], source=found["source"],
-                     image_url=image_url, title=title, status="ok")
-        return {"attached": True, "url": found["url"], "image_url": image_url}
+        return {"attached": True, "url": link["url"],
+                "image_url": link.get("image_url"), "cached": link.get("cached", False)}
     except Exception as exc:  # pragma: no cover - best effort
         log.warning("listing-link enrich failed (post %s, listing %s): %s",
                     post_id, listing_id, exc)
