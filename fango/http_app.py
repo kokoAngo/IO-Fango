@@ -1104,6 +1104,15 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
 
 _MAX_TOPIC_LISTINGS = 3  # how many proposed listings a topic row shows when photo-less
 
+# A listing is shown (as a card, chip, or its photo as a topic thumbnail) only
+# when it's "live": sale → 取引状況 公開中; rental → 広告可 可. Kept identical for
+# the topic row (outside) and the thread card (inside) so they never disagree
+# (e.g. a photo outside but nothing inside). Uses table alias ``l``.
+_VISIBLE_LISTING_SQL = (
+    "((COALESCE(l.transaction_type,'') = 'sale' AND l.ad_status = '公開中') "
+    "OR (COALESCE(l.transaction_type,'') != 'sale' AND l.ad_status = '可'))"
+)
+
 
 def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
     """Forum-index = a list of TOPICS (threads), each clickable into its full
@@ -1136,13 +1145,15 @@ def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
                       WHERE p.thread_id = t.id ORDER BY p.id, pa.sort_order LIMIT 1) AS att_img,
                    (SELECT li.listing_id FROM post_listing_refs r
                       JOIN listing_images li ON li.listing_id = r.listing_id
+                      JOIN listings l ON l.id = r.listing_id
                       JOIN posts p ON p.id = r.post_id
-                      WHERE p.thread_id = t.id AND li.kind = 'raw'
+                      WHERE p.thread_id = t.id AND li.kind = 'raw' AND {_VISIBLE_LISTING_SQL}
                       ORDER BY p.id, li.sort_order LIMIT 1) AS li_lid,
                    (SELECT li.sort_order FROM post_listing_refs r
                       JOIN listing_images li ON li.listing_id = r.listing_id
+                      JOIN listings l ON l.id = r.listing_id
                       JOIN posts p ON p.id = r.post_id
-                      WHERE p.thread_id = t.id AND li.kind = 'raw'
+                      WHERE p.thread_id = t.id AND li.kind = 'raw' AND {_VISIBLE_LISTING_SQL}
                       ORDER BY p.id, li.sort_order LIMIT 1) AS li_sort
                FROM threads t {join}
                WHERE {where}
@@ -1160,8 +1171,8 @@ def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
                JOIN posts p ON p.id = r.post_id
                JOIN listings l ON l.id = r.listing_id
                JOIN threads t ON t.id = p.thread_id
-               WHERE t.forum = ?
-               ORDER BY p.thread_id, p.id, r.id""",
+               WHERE t.forum = ? AND {_VISIBLE_LISTING_SQL}
+               ORDER BY p.thread_id, p.id, r.id""".format(_VISIBLE_LISTING_SQL=_VISIBLE_LISTING_SQL),
             (forum,),
         ).fetchall()
     finally:
@@ -1249,9 +1260,7 @@ def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
                        l.address, l.structure
                 FROM post_listing_refs r
                 JOIN listings l ON l.id = r.listing_id
-                WHERE r.post_id IN ({placeholders})
-                  AND ( (COALESCE(l.transaction_type,'') = 'sale' AND l.ad_status = '公開中')
-                     OR (COALESCE(l.transaction_type,'') != 'sale' AND l.ad_status = '可') )""",
+                WHERE r.post_id IN ({placeholders}) AND {_VISIBLE_LISTING_SQL}""",
             post_ids,
         ).fetchall()
         # First raw photo per referenced listing → a card thumbnail. Most rows
