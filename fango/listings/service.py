@@ -94,6 +94,38 @@ def upsert_listing(payload: dict[str, Any], conn: sqlite3.Connection | None = No
             conn.close()
 
 
+# Public-advertising gate. Keep in sync with the SQL in _build_search_where:
+# rental rows are cleared only when 広告可 = 可; sale rows only when 取引状況 = 公開中.
+ADVERTISABLE_RENTAL_AD_STATUS = "可"
+ADVERTISABLE_SALE_AD_STATUS = "公開中"
+
+
+def is_advertisable(transaction_type: str | None, ad_status: str | None) -> bool:
+    """Whether a listing may appear on the public surface (search results, the
+    /listings/<id> page, forum-post attachments). Internal/keyed lookups bypass
+    this; it's the deterministic mirror of the WHERE-clause gate."""
+    if (transaction_type or "") == "sale":
+        return ad_status == ADVERTISABLE_SALE_AD_STATUS
+    return ad_status == ADVERTISABLE_RENTAL_AD_STATUS
+
+
+def is_listing_advertisable(listing_id: int, conn: sqlite3.Connection | None = None) -> bool:
+    """Look up one listing and apply :func:`is_advertisable`. Missing → False."""
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        row = conn.execute(
+            "SELECT transaction_type, ad_status FROM listings WHERE id = ?", (listing_id,)
+        ).fetchone()
+        if row is None:
+            return False
+        return is_advertisable(row["transaction_type"], row["ad_status"])
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def get_listing(listing_id: int, conn: sqlite3.Connection | None = None) -> Listing | None:
     owns_conn = conn is None
     if conn is None:
@@ -233,6 +265,22 @@ def _build_search_where(criteria: dict[str, Any]) -> tuple[str, list[Any], str]:
         placeholders = ",".join("?" * len(only_ids))
         where.append(f"listings.id IN ({placeholders})")
         params.extend(only_ids)
+
+    # Sale (売買) listings are only recommended while 取引状況 = 公開中 (on-market),
+    # so we never surface 成約済み / 申込あり / 一時停止 ones (legally important:
+    # avoids おとり広告). Always applied; rental / other rows are unaffected.
+    where.append("(COALESCE(listings.transaction_type,'') != 'sale' "
+                 "OR listings.ad_status = '公開中')")
+
+    # Advertising-compliance gate for the public surface: rental rows carry the
+    # source 「広告可」 verdict in ad_status, and only 可 is cleared for public
+    # advertising. Everything else (不可 / 確認待ち / 物件による / -- / unknown) is
+    # held back. Internal callers that legitimately need the full pool pass
+    # criteria['include_non_advertisable'] = True. Sale rows are governed by the
+    # 公開中 clause above, so this only constrains non-sale rows.
+    if not criteria.get("include_non_advertisable"):
+        where.append("(COALESCE(listings.transaction_type,'') = 'sale' "
+                     "OR listings.ad_status = '可')")
 
     where_sql = " AND ".join(where) if where else ""
     return where_sql, params, join

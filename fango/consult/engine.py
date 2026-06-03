@@ -312,10 +312,11 @@ def _parse_intent(raw_text: str, usage: Any) -> IntentResult:
     ask_back = parsed.get("ask_back")
     if state == "asking" and not ask_back:
         ask_back = prompts.FALLBACK_ASKBACK
-    # Folded moderation verdict. Absent → treat as compliant (the LLM processed
-    # it); the degraded/error path below is the one that fails closed.
+    # Folded moderation verdict. A missing key means we have NO verdict — fail
+    # closed (don't publish) rather than assuming the model cleared it, since a
+    # dropped `compliant` is exactly when we can't trust the PII/topic check ran.
     compliant = parsed.get("compliant")
-    compliant = True if compliant is None else bool(compliant)
+    compliant = False if compliant is None else bool(compliant)
     forum = parsed.get("forum")
     if forum not in _FORUMS:
         forum = None

@@ -12,6 +12,22 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _listings_advertisable_by_default(monkeypatch):
+    """Default inserted test listings to 広告可=可 so the public ad_status gate
+    doesn't hide fixtures that omit it. Tests that exercise the gate set
+    ad_status explicitly and are left untouched."""
+    from fango.listings import service as _svc
+    _orig = _svc.insert_listing
+
+    def _wrap(payload, *args, **kwargs):
+        if isinstance(payload, dict) and "ad_status" not in payload:
+            payload = {**payload, "ad_status": "可"}
+        return _orig(payload, *args, **kwargs)
+
+    monkeypatch.setattr(_svc, "insert_listing", _wrap)
+
+
 @pytest.fixture
 def tmp_db(tmp_path, monkeypatch):
     """Point FANGO_DB_PATH at a fresh sqlite file for the test."""
@@ -141,6 +157,7 @@ def listing_factory(tmp_db):
             "floor": 12,
             "total_floors": 30,
             "url": "https://example.com/sample",
+            "ad_status": "可",  # advertisable by default (public ad_status gate)
         }
         defaults.update(overrides)
         conn = connect(tmp_db)

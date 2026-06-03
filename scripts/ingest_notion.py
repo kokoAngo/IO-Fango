@@ -23,7 +23,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from fango.db import bootstrap
 from fango.listings import service as ls
-from fango.listings.ingestion.notion import NotionListingAdapter
+from fango.listings.ingestion.notion import NotionListingAdapter, NotionSaleListingAdapter
 
 
 def _probe(adapter: NotionListingAdapter) -> int:
@@ -128,14 +128,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="Iterate and count without writing to the DB")
     p.add_argument("--probe", action="store_true",
                    help="Print DB schema + 2 sample rows, then exit")
+    p.add_argument("--sale", action="store_true",
+                   help="Ingest the 売買 DB (NOTION_SALE_DATABASE_ID) instead of rentals")
     args = p.parse_args(argv)
 
     bootstrap()
-    adapter = NotionListingAdapter()
+    adapter = NotionSaleListingAdapter() if args.sale else NotionListingAdapter()
     if not adapter.is_configured():
+        env = "NOTION_SALE_DATABASE_ID" if args.sale else "NOTION_LISTINGS_DATABASE_ID"
         print(
-            "Notion not configured. Set NOTION_TOKEN and NOTION_LISTINGS_DATABASE_ID "
-            "to enable. No-op.",
+            f"Notion not configured. Set NOTION_TOKEN and {env} to enable. No-op.",
             file=sys.stderr,
         )
         return 0

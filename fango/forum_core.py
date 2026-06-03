@@ -270,8 +270,20 @@ def attach_link_preview(
     """Attach an unfurled external link (OGP preview) to ``post_id``. ``url`` is
     the source page (e.g. a SUUMO/HOMES listing); ``image_url`` is a self-hosted
     copy of og:image. Idempotent per (post, url). Returns the row id."""
-    if not (url or "").strip():
+    from urllib.parse import urlparse
+
+    url = (url or "").strip()
+    if not url:
         raise ForumError("link preview url is empty")
+    # The url lands in an <a href> and image_url in an <img src> rendered to
+    # every viewer, so reject any non-http(s) scheme (e.g. javascript:/data:)
+    # before it can become stored XSS — mirroring _validate_attachment_url.
+    if urlparse(url).scheme not in ("http", "https"):
+        raise ForumError("link preview url must use http or https")
+    if image_url:
+        image_url = image_url.strip()
+        if urlparse(image_url).scheme not in ("http", "https"):
+            raise ForumError("link preview image_url must use http or https")
     owns_conn = conn is None
     if conn is None:
         conn = connect()
@@ -322,9 +334,17 @@ def attach_listing(post_id: int, listing_id: int, note: str | None = None,
     if conn is None:
         conn = connect()
     try:
-        l = conn.execute("SELECT id FROM listings WHERE id = ?", (listing_id,)).fetchone()
+        l = conn.execute(
+            "SELECT id, transaction_type, ad_status FROM listings WHERE id = ?",
+            (listing_id,),
+        ).fetchone()
         if l is None:
             raise ForumError(f"listing {listing_id} not found")
+        # Public posts must never carry a non-advertisable listing — belt-and-
+        # suspenders behind the gated search (rental needs 広告可=可, sale 公開中).
+        from .listings.service import is_advertisable
+        if not is_advertisable(l["transaction_type"], l["ad_status"]):
+            raise ForumError(f"listing {listing_id} is not cleared for public advertising")
         cur = conn.execute(
             "INSERT OR IGNORE INTO post_listing_refs(post_id, listing_id, note) VALUES (?, ?, ?)",
             (post_id, listing_id, note),

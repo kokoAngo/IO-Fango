@@ -53,6 +53,12 @@ def _listing_id_of(listing) -> int | None:
     return getattr(listing, "id", None)
 
 
+def _kind_of(transaction_type) -> str:
+    """Map a listing's transaction_type to the HOMES search kind: sale rows use
+    the 売買 search, everything else (rentals) the 賃貸 search."""
+    return "sale" if (transaction_type or "").strip() == "sale" else "rent"
+
+
 def resolve_external_link(listing_id: int, building_name: str | None = None,
                           conn=None, *, allow_lookup: bool = True) -> dict | None:
     """The external HOMES link for a listing — for surfacing to the agent (so it
@@ -90,11 +96,12 @@ def resolve_external_link(listing_id: int, building_name: str | None = None,
             return None
 
         row = conn.execute(
-            "SELECT building_name, url FROM listings WHERE id = ?",
+            "SELECT building_name, url, transaction_type FROM listings WHERE id = ?",
             (listing_id,),
         ).fetchone()
         name = building_name or (row["building_name"] if row else None)
         source_url = row["url"] if row else None
+        kind = _kind_of(row["transaction_type"] if row else None)
         if not name:
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
@@ -102,8 +109,8 @@ def resolve_external_link(listing_id: int, building_name: str | None = None,
 
         # One browser session returns url + og:image + og:title together
         # (HOMES is WAF-walled, so we can't refetch with httpx). We hotlink the
-        # HOMES image rather than self-host it.
-        found = external_lookup.find_listing(name, source_url=source_url)
+        # HOMES image rather than self-host it. Sale rows search HOMES 売買.
+        found = external_lookup.find_listing(name, kind=kind, source_url=source_url)
         if not found or not found.get("url"):
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
@@ -165,8 +172,10 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
     if conn is None:
         conn = connect()
     try:
-        # Cache pass: attach cached hits now; queue uncached for one batch lookup.
-        pending: list[tuple[int, str]] = []   # (listing_id, building_name)
+        # Cache pass: attach cached hits now; queue uncached for one batch lookup
+        # per kind (rent vs sale use different HOMES searches).
+        from collections import defaultdict
+        pending: dict[str, list[tuple[int, str]]] = defaultdict(list)  # kind → [(id, name)]
         for listing in listings:
             lid = _listing_id_of(listing)
             if not lid:
@@ -178,14 +187,15 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
                         post_id, cached["url"], image_url=cached.get("image_url"),
                         title=cached.get("title"), source=cached.get("source"), conn=conn)
                 continue
-            name = (listing.get("building_name") if isinstance(listing, dict) else None)
-            if not name:
-                row = conn.execute("SELECT building_name FROM listings WHERE id = ?", (lid,)).fetchone()
-                name = row["building_name"] if row else None
+            row = conn.execute(
+                "SELECT building_name, transaction_type FROM listings WHERE id = ?", (lid,)
+            ).fetchone()
+            name = (listing.get("building_name") if isinstance(listing, dict) else None) \
+                or (row["building_name"] if row else None)
             if not name:
                 _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
                 continue
-            pending.append((lid, name))
+            pending[_kind_of(row["transaction_type"] if row else None)].append((lid, name))
 
         if not pending:
             return
@@ -196,17 +206,18 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
         except RateLimitError:
             return
 
-        results = external_lookup.find_listings([n for _, n in pending])  # one browser session
-        for lid, name in pending:
-            found = results.get(name)
-            if found and found.get("url"):
-                _write_cache(conn, lid, url=found["url"], source=found.get("source"),
-                             image_url=found.get("image"), title=found.get("title"), status="ok")
-                forum_core.attach_link_preview(
-                    post_id, found["url"], image_url=found.get("image"),
-                    title=found.get("title"), source=found.get("source"), conn=conn)
-            else:
-                _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
+        for kind, items in pending.items():
+            results = external_lookup.find_listings([n for _, n in items], kind=kind)
+            for lid, name in items:
+                found = results.get(name)
+                if found and found.get("url"):
+                    _write_cache(conn, lid, url=found["url"], source=found.get("source"),
+                                 image_url=found.get("image"), title=found.get("title"), status="ok")
+                    forum_core.attach_link_preview(
+                        post_id, found["url"], image_url=found.get("image"),
+                        title=found.get("title"), source=found.get("source"), conn=conn)
+                else:
+                    _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
     except Exception as exc:  # pragma: no cover - best effort
         log.warning("batch listing-link enrich failed (post %s): %s", post_id, exc)
     finally:

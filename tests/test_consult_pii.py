@@ -23,6 +23,28 @@ def test_latin_name_with_honorific_is_removed():
     assert out.startswith("オーナー向けの")
 
 
+def test_bare_latin_name_without_honorific_removed():
+    # The exact hole the incident slipped through: a Latin name with NO title
+    # and NO honorific, in various contexts.
+    for text in (
+        "Chris Dai向けの東京都内の賃貸物件",
+        "Chris Daiのための物件を探しています",
+        "Find a rental in Tokyo for Chris Dai",
+        "Chris Dai is looking for a 2LDK",
+    ):
+        out, hits = pii.scrub_for_publish(text)
+        assert "Chris" not in out and "Dai" not in out, text
+        assert "name" in hits, text
+
+
+def test_latin_place_and_building_names_survive():
+    # Geography / building vocabulary must NOT be generalised to オーナー.
+    for text in ("Tokyo Tower の近く", "Shibuya Station 徒歩5分", "Park Hills という物件"):
+        out, hits = pii.scrub_for_publish(text)
+        assert "オーナー" not in out, text
+        assert "name" not in hits, text
+
+
 def test_western_title_name_removed():
     out, hits = pii.scrub_for_publish("Mr. John Smith のための物件")
     assert "John" not in out and "Smith" not in out

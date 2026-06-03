@@ -62,6 +62,7 @@ class Settings:
     http_port: int
     notion_token: str | None
     notion_listings_db: str | None
+    notion_sale_db: str | None
     public_base_url: str | None
     # Browser-driven HOMES lookup (find a listing's public URL + photo). Off by
     # default (incl. tests/dev); set FANGO_EXTERNAL_LOOKUP_ENABLED=1 to enable.
@@ -95,6 +96,7 @@ def load_settings() -> Settings:
         http_port=int(os.environ.get("FANGO_PORT", "8000")),
         notion_token=os.environ.get("NOTION_TOKEN") or None,
         notion_listings_db=os.environ.get("NOTION_LISTINGS_DATABASE_ID") or None,
+        notion_sale_db=os.environ.get("NOTION_SALE_DATABASE_ID") or None,
         public_base_url=pub,
         external_lookup_enabled=_env_bool("FANGO_EXTERNAL_LOOKUP_ENABLED", False),
         external_lookup_ua=os.environ.get("FANGO_EXTERNAL_LOOKUP_UA") or _DEFAULT_LOOKUP_UA,

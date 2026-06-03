@@ -15,7 +15,19 @@ from typing import Any, AsyncIterator, Optional
 
 QUEUE_SIZE = 128
 
+# Hard ceiling on concurrent SSE subscribers across the whole process. Each one
+# holds a 128-slot queue and is fanned out to on every publish(), so an
+# unbounded count is a memory + CPU DoS. 500 is far above any real audience.
+MAX_SUBSCRIBERS = 500
+
 EVENT_TYPES = ("new_thread", "new_post", "like_change", "mcp_call", "agent_activity")
+
+
+def at_capacity() -> bool:
+    """True when no more subscribers may be admitted (checked by SSE routes so
+    they can reject with a clean 503 before opening the stream)."""
+    with _lock:
+        return len(_subscribers) >= MAX_SUBSCRIBERS
 
 
 @dataclass
@@ -42,6 +54,10 @@ class _Subscriber:
 
 _subscribers: list[_Subscriber] = []
 _lock = threading.Lock()
+
+
+class SubscriberLimitError(RuntimeError):
+    """Raised when the concurrent-subscriber ceiling is reached."""
 
 
 def _matches(sub: _Subscriber, event: Event) -> bool:
@@ -95,7 +111,11 @@ class Subscription:
             forum=forum,
             thread_id=thread_id,
         )
+        # Hard cap enforced under the lock so a burst of simultaneous connects
+        # can't slip past the route-level at_capacity() pre-check.
         with _lock:
+            if len(_subscribers) >= MAX_SUBSCRIBERS:
+                raise SubscriberLimitError("SSE subscriber limit reached")
             _subscribers.append(self._sub)
         self._closed = False
 

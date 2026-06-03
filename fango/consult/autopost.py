@@ -23,6 +23,7 @@ import logging
 from typing import Any
 
 from .. import forum_core
+from ..db import connect, transaction
 from . import session as _ss
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,11 @@ def record_turn(
     caller+forum within ``_GROUP_IDLE_SECONDS`` continue the same thread; after a
     longer gap a new thread opens. Returns ``{"posted", "forum", "thread_id", "reason"}``.
     """
+    # The publish runs in one BEGIN IMMEDIATE transaction, so every write must
+    # share a single connection — own one when the caller didn't pass theirs.
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
     try:
         from ..auth import get_or_create_anon_agent_for_ip, get_or_create_system_agent
 
@@ -125,52 +131,76 @@ def record_turn(
             else get_or_create_anon_agent_for_ip(ip, conn=conn).id
         )
 
-        # Decide which thread this turn belongs to.
-        if session.log_thread_id and session.log_forum:
-            forum = session.log_forum
-            prev_area = (session.log_area_key or "").strip()
-            if area_key and prev_area and area_key != prev_area:
-                # Mid-session area switch (e.g. 杉並区 → 中野区): fork rather than
-                # mixing two wards into one thread. Join this caller's warm thread
-                # for the new area if any, else open a fresh one.
+        # Serialize the whole publish (thread decision → question post → pin →
+        # answer) under one BEGIN IMMEDIATE. Two concurrent turns from the same
+        # caller would otherwise both read "no warm thread" and each fork a
+        # duplicate; the write lock makes the second block until the first's
+        # _set_active_thread commits, so it sees the warm thread. Also makes the
+        # Q&A atomic — a mid-publish failure rolls back rather than orphaning a
+        # half-posted thread. transaction() is re-entrant, so create_thread/reply
+        # piggyback on this one.
+        with transaction(conn):
+            # Decide which thread this turn belongs to.
+            if session.log_thread_id and session.log_forum:
+                prev_area = (session.log_area_key or "").strip()
+                # Re-route every continuation turn: a rental session that switches
+                # to a sale query (or vice-versa) must move to the right board, not
+                # stay pinned to session.log_forum. Only re-route on an actual
+                # search signal so a criteria-less follow-up doesn't bounce boards.
+                new_forum = (
+                    _route_forum(criteria, forum_class)
+                    if _has_search_signal(criteria) else session.log_forum
+                )
+                area_changed = bool(area_key and prev_area and area_key != prev_area)
+                forum_changed = new_forum != session.log_forum
+                if area_changed or forum_changed:
+                    # Mid-session area switch (杉並区 → 中野区) or board switch
+                    # (賃貸 → 売買): fork rather than mixing them into one thread.
+                    # Join this caller's warm thread for the new forum+area if any,
+                    # else open a fresh one.
+                    forum = new_forum
+                    thread_id = _active_thread_for(post_author_id, forum, area_key, conn)
+                    is_new_thread = thread_id is None
+                else:
+                    # Same area and same board → keep appending here.
+                    forum = session.log_forum
+                    thread_id = session.log_thread_id
+                    is_new_thread = False
+            else:
+                forum = _route_forum(criteria, forum_class)
+                # First post of this session: join the caller's active thread for
+                # this forum+area if it's still warm, else open a fresh one. Keying
+                # on area_key keeps 大田区 and 文京区 consults in separate threads.
                 thread_id = _active_thread_for(post_author_id, forum, area_key, conn)
                 is_new_thread = thread_id is None
+
+            # The thread reads as a real Q&A: each agent question and each FANGO
+            # answer is its own post (asker's pseudonym vs the FANGO narrator).
+            q_body = (user_message or "").strip()
+            if is_new_thread:
+                _thread, _q = forum_core.create_thread(
+                    forum, _title(criteria, user_message), q_body, post_author_id,
+                    tags=["consult", "auto"], conn=conn,
+                )
+                thread_id = _thread.id
             else:
-                # Same area, or area not yet established → keep appending here.
-                thread_id = session.log_thread_id
-                is_new_thread = False
-        else:
-            forum = _route_forum(criteria, forum_class)
-            # First post of this session: join the caller's active thread for
-            # this forum+area if it's still warm, else open a fresh one. Keying
-            # on area_key keeps 大田区 and 文京区 consults in separate threads.
-            thread_id = _active_thread_for(post_author_id, forum, area_key, conn)
-            is_new_thread = thread_id is None
+                forum_core.reply(
+                    forum, thread_id, q_body, post_author_id,
+                    tags=["consult", "q"], conn=conn,
+                )
 
-        # The thread reads as a real Q&A: each agent question and each FANGO
-        # answer is its own post (asker's pseudonym vs the FANGO narrator).
-        q_body = (user_message or "").strip()
-        if is_new_thread:
-            _thread, _q = forum_core.create_thread(
-                forum, _title(criteria, user_message), q_body, post_author_id,
-                tags=["consult", "auto"], conn=conn,
-            )
-            thread_id = _thread.id
-        else:
-            forum_core.reply(
-                forum, thread_id, q_body, post_author_id,
-                tags=["consult", "q"], conn=conn,
-            )
-
-        # Pin this session to the thread (+ the area it settled on) and remember
-        # it as the caller's active thread for this forum+area.
-        _ss.set_log_thread(session.id, forum, thread_id, area_key=area_key, conn=conn)
-        session.log_forum = forum
-        session.log_thread_id = thread_id
-        if area_key:
-            session.log_area_key = area_key
-        _persist_post_agent(session.id, post_author_id, conn=conn)
-        _set_active_thread(post_author_id, forum, area_key, thread_id, conn=conn)
+            # Pin this session to the thread (+ the area it settled on) and remember
+            # it as the caller's active thread for this forum+area.
+            _ss.set_log_thread(session.id, forum, thread_id, area_key=area_key, conn=conn)
+            session.log_forum = forum
+            session.log_thread_id = thread_id
+            if area_key:
+                session.log_area_key = area_key
+            _persist_post_agent(session.id, post_author_id, conn=conn)
+            _set_active_thread(post_author_id, forum, area_key, thread_id, conn=conn)
+        # End of the race-critical section. The question post + grouping are now
+        # committed; the answer commits separately so its live-feed event isn't
+        # published before the data it points at is visible to other connections.
 
         # FANGO's answer — authored by the system narrator (FANGO案内).
         system = get_or_create_system_agent(conn=conn)
@@ -192,8 +222,8 @@ def record_turn(
                 if not item.get("thumbnail_url"):
                     imageless.append(item)
             # Image-less listings → fetch their HOMES links + photos in the
-            # BACKGROUND (one shared browser session) so the consult reply isn't
-            # blocked. The cards appear on the thread a few seconds later.
+            # BACKGROUND (one shared browser session) so the consult reply
+            # isn't blocked. The cards appear on the thread a few seconds later.
             if imageless:
                 _spawn_enrich(a_post.id, imageless)
 
@@ -211,6 +241,9 @@ def record_turn(
             "thread_id": getattr(session, "log_thread_id", None),
             "reason": "internal error",
         }
+    finally:
+        if owns_conn:
+            conn.close()
 
 
 # ---------------------------------------------------------------------------

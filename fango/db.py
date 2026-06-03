@@ -26,6 +26,10 @@ def _connect_raw(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    # Now that consult runs in worker threads (and background enrich in daemon
+    # threads), two writers can collide. Without this, the loser gets an instant
+    # `SQLITE_BUSY`; wait up to 5s for the write lock instead.
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 

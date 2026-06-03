@@ -162,12 +162,35 @@ class TestBlockFallback:
     def test_ddg_parse_none(self):
         assert external_lookup._ddg_parse("<div>no links here</div>") == []
 
+    def test_ddg_parse_sale_picks_mansion_not_chintai(self):
+        html = (
+            '<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.homes.co.jp%2Fchintai%2Froom%2Fr1%2F">rent</a>'
+            '<a href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.homes.co.jp%2Fmansion%2Fb-12345%2F">sale</a>'
+        )
+        urls = external_lookup._ddg_parse(html, "sale")
+        assert urls == ["https://www.homes.co.jp/mansion/b-12345/"]  # sale → /mansion/, not /chintai/
+
+    def test_enrich_routes_sale_to_sale_kind(self, a_post, listing_factory, monkeypatch):
+        _, post_id = a_post
+        monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
+        sale = listing_factory(building_name="売マンションX", transaction_type="sale",
+                               listing_type="sale", ad_status="公開中", price_man=6000)
+        seen = {}
+        def fake_find_listings(names, kind="rent"):
+            seen["kind"] = kind
+            return {n: {"url": "https://www.homes.co.jp/mansion/b-1/", "source": "homes",
+                        "image": None, "title": None} for n in names}
+        monkeypatch.setattr(external_lookup, "find_listings", fake_find_listings)
+        enrich.enrich_post_with_listings(post_id, [{"id": sale.id, "building_name": "売マンションX"}])
+        assert seen["kind"] == "sale"   # sale listing routed to HOMES 売買 search
+        assert forum_core.list_link_previews(post_id)[0]["url"] == "https://www.homes.co.jp/mansion/b-1/"
+
     def test_find_listings_falls_back_on_block(self, monkeypatch):
         # Browser reports the name blocked; DDG recovers the URL.
         monkeypatch.setattr(external_lookup, "_run_isolated",
                             lambda fn, *a, **k: {"results": {}, "blocked": ["B"]})
         monkeypatch.setattr(external_lookup, "_ddg_find_homes",
-                            lambda name: {"url": "https://www.homes.co.jp/chintai/room/z/",
+                            lambda name, kind="rent": {"url": "https://www.homes.co.jp/chintai/room/z/",
                                           "source": "homes", "image": None, "title": None})
         out = external_lookup.find_listings(["B"])
         assert out["B"]["url"] == "https://www.homes.co.jp/chintai/room/z/"
@@ -179,7 +202,7 @@ class TestBlockFallback:
         monkeypatch.setattr(external_lookup, "_run_isolated",
                             lambda fn, *a, **k: {"results": {"B": found}, "blocked": []})
         monkeypatch.setattr(external_lookup, "_ddg_find_homes",
-                            lambda name: pytest.fail("DDG fallback must not run when HOMES succeeded"))
+                            lambda *a, **k: pytest.fail("DDG fallback must not run when HOMES succeeded"))
         out = external_lookup.find_listings(["B"])
         assert out["B"] == found
 
@@ -193,7 +216,7 @@ class TestEnrichBatch:
         c = listing_factory(building_name="存在しないビル", url=None)  # HOMES miss
         calls: list = []
 
-        def fake_find_listings(names):
+        def fake_find_listings(names, kind=None):
             calls.append(list(names))
             return {
                 "GENOVIA南麻布": {"url": "https://www.homes.co.jp/chintai/room/aaa/",
@@ -225,7 +248,7 @@ class TestEnrichBatch:
         enrich.resolve_external_link(cached.id, "Cached")
 
         calls: list = []
-        def fake_find_listings(names):
+        def fake_find_listings(names, kind=None):
             calls.append(list(names))
             return {"Fresh": {"url": "https://www.homes.co.jp/chintai/room/fff/", "source": "homes",
                               "image": None, "title": "F"}}

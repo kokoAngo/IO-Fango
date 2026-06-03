@@ -158,6 +158,63 @@ def test_mid_session_area_switch_forks_thread(tmp_db, install_engine):
     assert len(forum_core.get_thread("chintai", t2)["posts"]) == 2
 
 
+def test_mid_session_forum_switch_forks_to_other_board(tmp_db, install_engine):
+    # A sale session (baibai) that pivots to a rental query must fork onto the
+    # rental board — the continuation branch now re-routes instead of staying
+    # pinned to session.log_forum.
+    install_engine(FakeEngine([
+        FakeIntent(state="asking", ask_back="予算は?",
+                   criteria_delta={"prefecture": "東京都", "price_max_man": 8000},
+                   area_key="東京都"),
+        FakeIntent(state="asking", ask_back="家賃は?",
+                   criteria_delta={"rent_max_yen": 200_000}, area_key="東京都"),
+    ]))
+    a = _run_turn("東京で中古マンションを買いたい", session_id=None)
+    sa = _session(a["session_id"])
+    assert sa.log_forum == "baibai"
+    t1 = sa.log_thread_id
+    b = _run_turn("やっぱり賃貸も見たい", session_id=a["session_id"])
+    sb = _session(b["session_id"])
+    assert a["session_id"] == b["session_id"]      # same session
+    assert sb.log_forum == "chintai"               # re-routed to the rental board
+    assert sb.log_thread_id != t1                  # forked, not appended
+
+
+def test_concurrent_first_turns_same_caller_share_one_thread(tmp_db):
+    # Two parallel first-turns from the same keyless caller (same IP + area) must
+    # land in ONE thread, not fork duplicates — the BEGIN IMMEDIATE around the
+    # thread decision serializes them. Also exercises the race-safe anon-agent
+    # creation (both turns resolve to the same anon identity).
+    import threading
+    from fango.consult import autopost
+    from fango.consult import session as ss
+
+    results: list[dict] = []
+    lock = threading.Lock()
+
+    def worker():
+        sess = ss.create_session(None, ttl_seconds=3600)
+        r = autopost.record_turn(
+            session=sess, user_message="大田区で1LDKを探しています",
+            reply="承知しました。", state="asking",
+            criteria={"prefecture": "東京都"}, results=None,
+            keyed_agent_id=None, ip="198.51.100.42", compliant=True,
+            forum_class="chintai", area_key="大田区",
+        )
+        with lock:
+            results.append(r)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    posted = [r for r in results if r["posted"]]
+    assert len(posted) == 2                              # both turns published
+    assert len({r["thread_id"] for r in posted}) == 1    # …into the SAME thread
+
+
 def test_no_exact_match_falls_back_to_near_options(tmp_db, install_engine):
     # Nothing matches 雪が谷 / 10万円, but loosening (drop station, widen budget)
     # surfaces a near option — we recommend that instead of "no results".

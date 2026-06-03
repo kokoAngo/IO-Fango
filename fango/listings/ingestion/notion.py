@@ -63,12 +63,16 @@ class NotionListingAdapter(ListingAdapter):
                 resp.raise_for_status()
                 data = resp.json()
                 for page in data.get("results", []):
-                    record = _page_to_record(page)
+                    record = self._page_to_record(page)
                     if record:
                         yield record
                 if not data.get("has_more"):
                     break
                 cursor = data.get("next_cursor")
+
+    def _page_to_record(self, page: dict[str, Any]) -> dict[str, Any] | None:
+        """Map a Notion page → a listings payload. Overridden per source."""
+        return _page_to_record(page)
 
 
 def _num(s: Any) -> float | None:
@@ -166,3 +170,97 @@ def _page_to_record(page: dict[str, Any]) -> dict[str, Any] | None:
         "url": None,
         "raw_json": json.dumps(page, ensure_ascii=False),
     }
+
+
+# ---------------------------------------------------------------------------
+# Sale (売買) source — a separate Notion DB with its own columns. Its 取引状況
+# select (公開中 / 申込あり / 一時停止 / -) is stored on ``ad_status`` so search
+# can show ONLY 公開中 sale listings (see service._build_search_where).
+# ---------------------------------------------------------------------------
+
+# Phone numbers (often a personal mobile) are never ingested or stored.
+_SALE_PII_PROP = "電話番号"
+
+
+def _prop(props: dict, name: str):
+    """Read a Notion property value: title/rich_text/select/url → str, number → float."""
+    p = props.get(name)
+    if not p:
+        return None
+    typ = p.get("type")
+    if typ in ("title", "rich_text"):
+        arr = p.get(typ) or []
+        return "".join(x.get("plain_text", "") for x in arr).strip() or None
+    if typ == "select":
+        sel = p.get("select")
+        return sel.get("name") if sel else None
+    if typ == "number":
+        return p.get("number")
+    if typ == "url":
+        return p.get("url")
+    return None
+
+
+def _page_to_sale_record(page: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a 売買 Notion page → a listings payload (transaction_type='sale').
+
+    All statuses are ingested; the 取引状況 verdict lands on ``ad_status`` so
+    only 公開中 ones are surfaced at search time."""
+    props = page.get("properties") or {}
+
+    def g(name: str):
+        return _prop(props, name)
+
+    building = g("建物名") or g("名称")
+    address = g("所在地")
+    if not address and not building:
+        return None
+
+    pref, city = _split_address(address)
+    line, station = _split_station(g("沿線駅") or g("交通"))
+    built = (g("築年月") or "")
+    built_year = int(built[:4]) if built[:4].isdigit() else None
+    area = _num(g("専有面積")) or _num(g("建物面積")) or _num(g("土地面積"))
+
+    # Drop the phone number before persisting the raw page (PII hygiene).
+    safe_page = dict(page)
+    if isinstance(safe_page.get("properties"), dict):
+        safe_props = dict(safe_page["properties"])
+        safe_props.pop(_SALE_PII_PROP, None)
+        safe_page["properties"] = safe_props
+
+    return {
+        "reins_id": f"sale:{g('物件番号') or page['id']}",
+        "building_name": building,
+        "address": address,
+        "prefecture": pref,
+        "city": city,
+        "ward": g("区"),
+        "station": station,
+        "station_line": line,
+        "layout": g("間取"),
+        "area_sqm": area,
+        "price_man": _intf(g("価格万円")),
+        "floor": _intf(g("所在階")),
+        "built_year": built_year,
+        "structure": g("物件種目") or g("物件種別"),
+        "agent_company": g("業者名"),
+        "ad_status": g("取引状況"),            # 公開中 / 申込あり / 一時停止 / -
+        "listing_type": "sale",
+        "transaction_type": "sale",
+        "url": None,
+        "raw_json": json.dumps(safe_page, ensure_ascii=False),
+    }
+
+
+class NotionSaleListingAdapter(NotionListingAdapter):
+    """Same Notion HTTP loop, pointed at the 売買 database with the sale mapper."""
+    name = "notion_sale"
+
+    def __init__(self, token: str | None = None, database_id: str | None = None):
+        settings = load_settings()
+        self.token = token or settings.notion_token
+        self.database_id = database_id or settings.notion_sale_db
+
+    def _page_to_record(self, page: dict[str, Any]) -> dict[str, Any] | None:
+        return _page_to_sale_record(page)

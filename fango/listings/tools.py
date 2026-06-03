@@ -350,11 +350,13 @@ def register(mcp) -> None:
         if not load_settings().external_lookup_enabled:
             return {"status": "disabled"}
         from . import external_lookup, service as svc
+        from .enrich import _kind_of
         listing = svc.get_listing(listing_id)
         if listing is None:
             return None
+        ttype = listing.extra.get("transaction_type") if isinstance(listing.extra, dict) else None
         found = external_lookup.find_listing(
-            listing.building_name, source_url=listing.url,
+            listing.building_name, kind=_kind_of(ttype), source_url=listing.url,
         )
         if not found or not found.get("url"):
             return {"status": "not_found", "listing_id": listing_id,

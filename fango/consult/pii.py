@@ -54,6 +54,61 @@ _LATIN_NAME_HON = re.compile(
     r"[A-Z][A-Za-z'’.\-]*(?:\s+[A-Z][A-Za-z'’.\-]*){0,3}\s*(?:" + _HONORIFICS + r")"
 )
 
+# A bare Latin personal name with NO title and NO honorific — the exact hole the
+# "Chris Dai向け" incident slipped through. Two-to-four consecutive Capitalised
+# Latin tokens (each Upper+lower so all-caps acronyms like LDK/JR/NYC are
+# ignored), not bounded by other Latin letters so it still fires when glued to
+# Japanese ("Chris Dai向け"). To avoid generalising legitimate place/building
+# names, a match is only treated as a name when *not every* token is in the
+# geography/real-estate stoplist below.
+_LATIN_NAME = re.compile(
+    r"(?<![A-Za-z])[A-Z][a-z][A-Za-z'’\-]*(?:\s+[A-Z][a-z][A-Za-z'’\-]*){1,3}(?![A-Za-z])"
+)
+
+# Lower-cased tokens that, when they make up the WHOLE matched phrase, mark it as
+# a place / building / real-estate term rather than a person. Generous on
+# purpose — a missed place word just over-generalises a noun (acceptable per this
+# module's design); a missed name would leak PII.
+_LATIN_NAME_STOP = frozenset({
+    # Tokyo 23 wards + major cities / prefectures (romaji)
+    "chiyoda", "chuo", "minato", "shinjuku", "bunkyo", "taito", "sumida", "koto",
+    "shinagawa", "meguro", "ota", "setagaya", "shibuya", "nakano", "suginami",
+    "toshima", "kita", "arakawa", "itabashi", "nerima", "adachi", "katsushika",
+    "edogawa", "tokyo", "osaka", "kyoto", "yokohama", "kawasaki", "saitama",
+    "chiba", "nagoya", "kobe", "fukuoka", "sapporo", "sendai", "hiroshima",
+    "nara", "yokosuka", "musashino", "machida", "hachioji",
+    # popular areas / stations
+    "ebisu", "daikanyama", "roppongi", "ginza", "ikebukuro", "ueno", "asakusa",
+    "akihabara", "harajuku", "omotesando", "jiyugaoka", "kichijoji", "koenji",
+    "nakameguro", "gotanda", "osaki", "tamachi", "shimbashi", "yurakucho",
+    "kanda", "ochanomizu", "iidabashi", "ichigaya", "yotsuya", "takadanobaba",
+    "otsuka", "sugamo", "komagome", "nippori", "akabane", "oji", "azabu",
+    # transit / geography
+    "station", "line", "eki", "dori", "street", "avenue", "road", "bridge",
+    "river", "gawa", "park", "koen", "garden", "gardens", "hills", "heights",
+    "tower", "towers", "central", "north", "south", "east", "west", "side",
+    "town", "city", "ward", "area", "district", "front", "gate", "square",
+    # building / real-estate vocabulary
+    "residence", "residences", "mansion", "apartment", "apartments", "house",
+    "home", "homes", "court", "terrace", "place", "plaza", "building", "bldg",
+    "flat", "room", "rooms", "floor", "villa", "palace", "annex", "wing",
+    "grand", "maison", "royal", "crystal", "sun", "green", "blue", "white",
+    "view", "condo", "studio", "loft", "suite", "estate", "real", "property",
+    "properties", "new", "used", "rent", "rental", "sale", "buy",
+    # common English query filler
+    "the", "and", "for", "with", "near", "close", "please", "looking", "want",
+    "need", "find", "search", "budget", "yen", "around", "under", "over",
+    "within", "between", "family", "single", "pet", "parking",
+})
+
+
+def _latin_name_sub(m: "re.Match") -> str:
+    tokens = [t for t in re.split(r"\s+", m.group(0)) if t]
+    # Whole phrase is geography/RE vocabulary → leave it (e.g. "Tokyo Tower").
+    if all(t.lower().strip("'’.-") in _LATIN_NAME_STOP for t in tokens):
+        return m.group(0)
+    return _REPLACEMENT
+
 # Japanese (kanji/kana) name + honorific, e.g. "田中さん", "佐藤様". Stoplist-aware.
 _JP_NAME_HON = re.compile(
     r"([一-龥々〆ヶぁ-んァ-ヶー]{1,6})(" + _HONORIFICS + r")"
@@ -95,6 +150,12 @@ def scrub_for_publish(text: str) -> tuple[str, list[str]]:
         name_found = True
         out = new
     new = _LATIN_NAME_HON.sub(_REPLACEMENT, out)
+    if new != out:
+        name_found = True
+        out = new
+
+    # Bare Latin name (no title/honorific) — the "Chris Dai向け" hole.
+    new = _LATIN_NAME.sub(_latin_name_sub, out)
     if new != out:
         name_found = True
         out = new

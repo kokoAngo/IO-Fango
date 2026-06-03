@@ -95,7 +95,16 @@ def get_or_create_system_agent(conn: sqlite3.Connection | None = None) -> Agent:
         if row is not None:
             agent = Agent.from_row(row)
         else:
-            agent, _key = create_agent(SYSTEM_AGENT_NAME, vendor="fango", conn=conn)
+            try:
+                agent, _key = create_agent(SYSTEM_AGENT_NAME, vendor="fango", conn=conn)
+            except sqlite3.IntegrityError:
+                # Concurrent first-post created it — read the winner's row.
+                row = conn.execute(
+                    "SELECT * FROM agents WHERE name = ?", (SYSTEM_AGENT_NAME,)
+                ).fetchone()
+                if row is None:
+                    raise
+                agent = Agent.from_row(row)
         _system_agent_id = agent.id
         return agent
     finally:
@@ -140,8 +149,16 @@ def get_or_create_anon_agent_for_ip(ip: str | None, conn: sqlite3.Connection | N
         row = conn.execute("SELECT * FROM agents WHERE name = ?", (name,)).fetchone()
         if row is not None:
             return Agent.from_row(row)
-        agent, _key = create_agent(name, vendor="anon", conn=conn)
-        return agent
+        try:
+            agent, _key = create_agent(name, vendor="anon", conn=conn)
+            return agent
+        except sqlite3.IntegrityError:
+            # A concurrent keyless caller from the same IP won the race on the
+            # UNIQUE(name) constraint — read and use their row instead of erroring.
+            row = conn.execute("SELECT * FROM agents WHERE name = ?", (name,)).fetchone()
+            if row is None:
+                raise
+            return Agent.from_row(row)
     finally:
         if owns_conn:
             conn.close()

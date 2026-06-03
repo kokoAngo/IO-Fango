@@ -11,6 +11,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markupsafe import escape
 from sse_starlette.sse import EventSourceResponse
 
 from . import activity
@@ -26,6 +27,7 @@ from .auth import (
 from .config import load_settings
 from .db import bootstrap, connect
 from .events_stream import format_sse
+from . import events as events_mod
 from .events import subscribe
 from .baibai import service as bb
 from .chintai import service as ct
@@ -621,6 +623,12 @@ def _register_routes(app: FastAPI) -> None:
         if bundle is None:
             raise HTTPException(status_code=404, detail="listing not found")
         listing = bundle["listing"]
+        # Advertising-compliance gate: non-advertisable rows (広告可 ≠ 可, or a
+        # sale not 公開中) must not have a public page. 404 rather than 403 so the
+        # page is indistinguishable from a non-existent listing.
+        if not ls.is_advertisable(listing.extra.get("transaction_type"),
+                                  listing.extra.get("ad_status")):
+            raise HTTPException(status_code=404, detail="listing not found")
         # Single thumbnail only — the first raw image. No gallery, no
         # processed crops, no shuhen tour.
         thumbnail = None
@@ -940,13 +948,16 @@ def _register_routes(app: FastAPI) -> None:
                                   tags=tag_list, agent_created_at=agent.created_at)
         else:
             raise HTTPException(status_code=400, detail=f"compose not supported for {forum}")
-        # Return a single thread row to prepend to the list.
+        # Return a single thread row to prepend to the list. Escape the
+        # agent-controlled bits (name initial, thread title) — this is hand-built
+        # HTML, not an autoescaped template, so they'd otherwise be reflected XSS.
+        initial = escape(agent.name[0].upper()) if agent.name else "?"
         return HTMLResponse(
             f'<a class="post" href="/{forum}/t/{out["thread"].id}" '
             f'style="display: grid; grid-template-columns: 40px 1fr; gap: 12px;">'
-            f'<span class="avatar" data-tone="{agent.id % 10}">{agent.name[0].upper()}</span>'
+            f'<span class="avatar" data-tone="{agent.id % 10}">{initial}</span>'
             f'<div class="post-body"><header class="post-byline">'
-            f'<span class="name">{out["thread"].title}</span>'
+            f'<span class="name">{escape(out["thread"].title)}</span>'
             f'<span class="sep">·</span>'
             f'<span class="meta-time">now</span></header>'
             f'<div class="post-text muted" style="font-size: var(--text-sm);">1 post in this thread</div>'
@@ -955,14 +966,27 @@ def _register_routes(app: FastAPI) -> None:
 
     # ----------------------- SSE -------------------------------------------
 
+    def _guard_sse(request: Request) -> None:
+        """Reject scraper UAs and refuse new streams once the global subscriber
+        ceiling is hit — keeps the firehose from being a memory/CPU DoS. SSE is
+        long-lived, so we gate here rather than via the per-request IP cap (which
+        would penalise a normal browser's persistent connection)."""
+        ua = (request.headers.get("user-agent") or "").lower()
+        if any(needle in ua for needle in _BOT_UA_NEEDLES):
+            raise HTTPException(403, detail="identify as a browser to stream events")
+        if events_mod.at_capacity():
+            raise HTTPException(503, detail="event stream at capacity; retry shortly")
+
     @app.get("/events")
-    async def events_firehose():
+    async def events_firehose(request: Request):
+        _guard_sse(request)
         return EventSourceResponse(_sse_iter())
 
     @app.get("/{forum}/stream")
-    async def forum_stream(forum: str, thread_id: int | None = None):
+    async def forum_stream(request: Request, forum: str, thread_id: int | None = None):
         if forum not in FORUMS:
             raise HTTPException(404)
+        _guard_sse(request)
         return EventSourceResponse(_sse_iter(forum=forum, thread_id=thread_id))
 
 
@@ -1100,7 +1124,9 @@ def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
             f"""SELECT r.post_id, l.id, l.building_name, l.layout, l.price_man
                 FROM post_listing_refs r
                 JOIN listings l ON l.id = r.listing_id
-                WHERE r.post_id IN ({placeholders})""",
+                WHERE r.post_id IN ({placeholders})
+                  AND ( (COALESCE(l.transaction_type,'') = 'sale' AND l.ad_status = '公開中')
+                     OR (COALESCE(l.transaction_type,'') != 'sale' AND l.ad_status = '可') )""",
             post_ids,
         ).fetchall()
         # First raw photo per referenced listing → a card thumbnail. Most rows
