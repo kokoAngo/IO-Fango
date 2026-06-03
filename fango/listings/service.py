@@ -2,11 +2,29 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from typing import Any, Iterable
 
 from ..db import connect
 from ..models import Listing
+
+_PREF_RE = re.compile(r"^\s*.+?[都道府県]")
+
+
+def display_name(building_name: str | None, address: str | None = None,
+                 structure: str | None = None) -> str | None:
+    """A human label for a listing. Detached houses / townhouses (一戸建・テラス)
+    have no 建物名, so fall back to address (sans 都道府県) + 物件種目 — e.g.
+    "江戸川区大杉５丁目の中古戸建" — instead of a blank or the 物件番号."""
+    if building_name and building_name.strip():
+        return building_name.strip()
+    addr = (address or "").strip()
+    if addr:
+        short = _PREF_RE.sub("", addr).strip() or addr
+        s = (structure or "").strip()
+        return f"{short}の{s}" if s else short
+    return None
 
 LISTING_COLUMNS = (
     "reins_id", "title", "building_name", "building_name_kana", "address",

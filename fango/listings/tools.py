@@ -118,7 +118,9 @@ def _listing_brief(listing, conn=None) -> dict[str, Any]:
         "id": listing.id,
         "external_id": listing.reins_id,
         "title": listing.title,
-        "building_name": listing.building_name,
+        "building_name": svc.display_name(
+            listing.building_name, listing.address,
+            listing.extra.get("structure") if isinstance(listing.extra, dict) else None),
         "address": listing.address,
         "prefecture": listing.prefecture,
         "city": listing.city,
@@ -190,8 +192,15 @@ def get_listing_payload(listing_id: int, conn=None) -> dict[str, Any] | None:
         }
         for img in deduped
     ]
+    listing_out = dump(listing)
+    # Detached houses / townhouses have no 建物名 — present them by address +
+    # 物件種目 so the detail page isn't titled blank.
+    if isinstance(listing_out, dict) and not listing_out.get("building_name"):
+        listing_out["building_name"] = svc.display_name(
+            listing.building_name, listing.address,
+            listing.extra.get("structure") if isinstance(listing.extra, dict) else None)
     payload = {
-        "listing": dump(listing),
+        "listing": listing_out,
         "transports": bundle["transports"],
         "images": images_out,
         "price_history": bundle["price_history"],

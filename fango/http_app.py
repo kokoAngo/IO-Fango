@@ -1214,7 +1214,8 @@ def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
     try:
         placeholders = ",".join("?" * len(post_ids))
         rows = conn.execute(
-            f"""SELECT r.post_id, l.id, l.building_name, l.layout, l.price_man
+            f"""SELECT r.post_id, l.id, l.building_name, l.layout, l.price_man,
+                       l.address, l.structure
                 FROM post_listing_refs r
                 JOIN listings l ON l.id = r.listing_id
                 WHERE r.post_id IN ({placeholders})
@@ -1243,7 +1244,8 @@ def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
     out: dict[int, list] = {}
     for r in rows:
         out.setdefault(r["post_id"], []).append({
-            "id": r["id"], "building_name": r["building_name"],
+            "id": r["id"],
+            "building_name": ls.display_name(r["building_name"], r["address"], r["structure"]),
             "layout": r["layout"], "price_man": r["price_man"],
             "thumbnail": thumbs.get(r["id"]),
         })

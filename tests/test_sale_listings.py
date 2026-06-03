@@ -22,6 +22,16 @@ def _mk(conn, name, *, status, kind="sale"):
     return insert_listing(payload, conn=conn)
 
 
+def test_display_name_falls_back_to_address_and_type():
+    from fango.listings.service import display_name
+    # Detached house: no 建物名 → address (sans 都道府県) + 物件種目.
+    assert display_name(None, "東京都江戸川区大杉５丁目", "中古戸建") == "江戸川区大杉５丁目の中古戸建"
+    # Real building name is kept as-is.
+    assert display_name("プラウド小岩", "東京都江戸川区", "新築マンション") == "プラウド小岩"
+    # No address → nothing to show (template will use 無題物件).
+    assert display_name(None, None, "中古戸建") is None
+
+
 def _page(props):
     return {"id": "pageid", "properties": props}
 
