@@ -21,9 +21,9 @@
 </div>
 {% endif %}
 
-{# A list of topics (threads). Each is clickable into its full conversation;
-   topics with a photo (anywhere in the thread) show it after the title and
-   sort to the top. #}
+{# A list of topics (threads) in time order (newest first). Each is clickable
+   into its full conversation; a photo from anywhere in the thread shows after
+   the title when present (it does not change the ordering). #}
 <div class="feed-thread-list">
 {% for row in feed %}
   <a class="post thread-row{% if row.thumbnail %} has-thumb{% endif %}" href="/{{ forum }}/t/{{ row.thread.id }}">

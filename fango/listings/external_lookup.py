@@ -23,6 +23,7 @@ with a running asyncio loop (FastAPI / MCP).
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import unicodedata
@@ -211,27 +212,55 @@ def _browser_find_many(names: list[str], kind: str = "rent") -> dict:
             browser.close()
 
 
+def _lookup_concurrency() -> int:
+    try:
+        return max(1, int(os.environ.get("FANGO_LOOKUP_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
+
+
+# Global cap on concurrent browser sessions — THE memory guard. Each headless
+# Chrome is ~300-400MB, so without this a burst of consults/tool-calls could open
+# dozens at once and OOM the box. Default 1 → at most one browser at a time.
+_BROWSER_SEM = threading.BoundedSemaphore(_lookup_concurrency())
+# How long a caller waits for a free slot before giving up and letting the web
+# (DuckDuckGo) fallback handle it instead of piling on more browsers.
+_SLOT_WAIT_SECONDS = 8.0
+
+
 def _run_isolated(fn, *args, timeout: float = 70.0):
-    """Run a sync function in a dedicated thread (so sync Playwright doesn't
-    collide with an asyncio loop on the calling thread)."""
-    box: dict = {}
+    """Run a sync function (a browser session) in a dedicated thread so sync
+    Playwright doesn't collide with the caller's asyncio loop — under a global
+    concurrency cap so only N browsers ever run at once.
 
-    def target():
-        try:
-            box["v"] = fn(*args)
-        except Exception as exc:  # pragma: no cover - browser variance
-            box["e"] = exc
+    The slot is acquired/released on THIS thread (not the worker), so a worker
+    that wedges past ``timeout`` can't permanently strand the slot. A timed-out
+    browser is left to Playwright's own per-op timeouts to close; tightening that
+    to a hard process-kill is a follow-up."""
+    if not _BROWSER_SEM.acquire(timeout=_SLOT_WAIT_SECONDS):
+        log.info("HOMES lookup at capacity; skipping browser (web fallback)")
+        return None
+    try:
+        box: dict = {}
 
-    t = threading.Thread(target=target, daemon=True)
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
-        log.warning("HOMES browser lookup timed out")
-        return None
-    if "e" in box:
-        log.warning("HOMES browser lookup failed: %s", box["e"])
-        return None
-    return box.get("v")
+        def target():
+            try:
+                box["v"] = fn(*args)
+            except Exception as exc:  # pragma: no cover - browser variance
+                box["e"] = exc
+
+        t = threading.Thread(target=target, daemon=True)
+        t.start()
+        t.join(timeout)
+        if t.is_alive():
+            log.warning("HOMES browser lookup timed out")
+            return None
+        if "e" in box:
+            log.warning("HOMES browser lookup failed: %s", box["e"])
+            return None
+        return box.get("v")
+    finally:
+        _BROWSER_SEM.release()
 
 
 # ---------------------------------------------------------------------------

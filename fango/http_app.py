@@ -823,9 +823,9 @@ def _register_routes(app: FastAPI) -> None:
         # if forum == "wiki":
         #     return await wiki_index(request, q)
         _service_or_404(forum)
-        # The section is a list of topics (threads), each clickable into its
-        # full conversation; a photo from anywhere in the thread shows after the
-        # title. Photo-bearing topics first. The live "動態" feed lives on home.
+        # The section is a list of topics (threads) in time order (newest
+        # first), each clickable into its full conversation; a photo from
+        # anywhere in the thread shows inline. The live "動態" feed lives on home.
         ctx = shared_ctx(request, active_forum=forum)
         ctx.update({"forum": forum, "feed": _forum_feed(forum), "tag": None, "q": q})
         return templates.TemplateResponse(request, "forum_index.html", ctx)
@@ -1104,11 +1104,11 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
 
 def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
     """Forum-index = a list of TOPICS (threads), each clickable into its full
-    multi-turn conversation. Returns ``[{thread, post_count, thumbnail}]`` where
-    ``thumbnail`` is a representative photo from anywhere in the thread (a HOMES
-    link-preview image, an uploaded attachment, or a referenced listing's own
-    photo) or None. Threads with a photo sort first; then newest activity. ALL
-    threads are listed."""
+    multi-turn conversation, ordered by recency (newest activity first). Returns
+    ``[{thread, post_count, thumbnail}]`` where ``thumbnail`` is a representative
+    photo from anywhere in the thread (a HOMES link-preview image, an uploaded
+    attachment, or a referenced listing's own photo) shown inline when present,
+    or None. ALL threads are listed."""
     from .listings.tools import _img_url
     from .models import Thread
 
@@ -1156,9 +1156,8 @@ def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
             thumb = _img_url(r["li_lid"], "raw", r["li_sort"] or 0)
         feed.append({"thread": Thread.from_row(r), "post_count": r["post_count"],
                      "thumbnail": thumb})
-    # Topics with a photo first; stable sort keeps the newest-activity order
-    # within each group.
-    feed.sort(key=lambda x: x["thumbnail"] is None)
+    # Already newest-activity-first from SQL; keep that pure time order (a photo
+    # just shows inline, it does not change a topic's position).
     return feed
 
 

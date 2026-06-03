@@ -20,6 +20,8 @@ small status dict the tool surfaces back to the agent.
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from .. import forum_core
@@ -31,6 +33,16 @@ log = logging.getLogger(__name__)
 # How many result listings to attach to a 'ready' turn's reply.
 _MAX_ATTACHED = 3
 
+# Background HOMES enrichment runs on a SINGLE-worker pool so a burst of consults
+# can't spawn a thread-per-post storm (each would drive a headless browser). The
+# real memory guard is the browser-concurrency cap in external_lookup; this just
+# keeps us from queuing unbounded background work. Submissions past the queue cap
+# are dropped (best-effort feature — a missed link card is acceptable).
+_ENRICH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="enrich")
+_ENRICH_MAX_QUEUED = 16
+_enrich_lock = threading.Lock()
+_enrich_pending = 0
+
 
 def _spawn_enrich(post_id: int, items: list[dict]) -> None:
     """Fire-and-forget: fetch up to ``_MAX_ATTACHED`` listings' HOMES links +
@@ -41,20 +53,30 @@ def _spawn_enrich(post_id: int, items: list[dict]) -> None:
     from ..config import load_settings
     if not load_settings().external_lookup_enabled:
         return
-    import threading
     data = [{"id": it.get("id"), "building_name": it.get("building_name")}
             for it in items if it.get("id")]
     if not data:
         return
 
+    global _enrich_pending
+    with _enrich_lock:
+        if _enrich_pending >= _ENRICH_MAX_QUEUED:
+            log.debug("enrich queue full (%d); dropping post %s", _enrich_pending, post_id)
+            return
+        _enrich_pending += 1
+
     def _run():
+        global _enrich_pending
         try:
             from ..listings import enrich as _enrich
             _enrich.enrich_post_with_listings(post_id, data)  # own DB connection
         except Exception as exc:  # pragma: no cover - best effort
             log.debug("background enrich failed (post %s): %s", post_id, exc)
+        finally:
+            with _enrich_lock:
+                _enrich_pending -= 1
 
-    threading.Thread(target=_run, daemon=True).start()
+    _ENRICH_POOL.submit(_run)
 
 # Forum routing.
 _RENTAL_KEYS = ("rent_min_yen", "rent_max_yen")
