@@ -22,6 +22,55 @@ def _mk(conn, name, *, status, kind="sale"):
     return insert_listing(payload, conn=conn)
 
 
+def _page(props):
+    return {"id": "pageid", "properties": props}
+
+
+def _rt(s):
+    return {"type": "rich_text", "rich_text": [{"plain_text": s}]}
+
+
+def _title(s):
+    return {"type": "title", "title": [{"plain_text": s}]}
+
+
+def _sel(s):
+    return {"type": "select", "select": {"name": s}}
+
+
+def _numf(n):
+    return {"type": "number", "number": n}
+
+
+def test_sale_mapper_drops_numeric_name():
+    """A row with no 建物名 whose 名称(title) is just the 物件番号 must NOT become
+    a numeric 'building name'."""
+    from fango.listings.ingestion.notion import _page_to_sale_record
+    rec = _page_to_sale_record(_page({
+        "建物名": _rt(""),
+        "名称": _title("100138130569"),
+        "物件番号": _rt("100138130569"),
+        "所在地": _rt("東京都豊島区上池袋２丁目"),
+        "取引状況": _sel("公開中"),
+        "価格万円": _numf(6480),
+    }))
+    assert rec["building_name"] is None         # not the number
+    assert rec["address"] == "東京都豊島区上池袋２丁目"
+    assert rec["ad_status"] == "公開中"
+    assert rec["price_man"] == 6480
+    assert rec["transaction_type"] == "sale"
+
+
+def test_sale_mapper_keeps_real_name():
+    from fango.listings.ingestion.notion import _page_to_sale_record
+    rec = _page_to_sale_record(_page({
+        "建物名": _rt("プラウドタワー小岩フロント"),
+        "所在地": _rt("東京都江戸川区"),
+        "取引状況": _sel("公開中"),
+    }))
+    assert rec["building_name"] == "プラウドタワー小岩フロント"
+
+
 def test_only_public_sale_listings_surface(tmp_db):
     conn = connect(tmp_db)
     try:

@@ -212,6 +212,11 @@ def _page_to_sale_record(page: dict[str, Any]) -> dict[str, Any] | None:
         return _prop(props, name)
 
     building = g("建物名") or g("名称")
+    # 名称 (the title) is often just the 物件番号 for rows that have no real
+    # 建物名 — a building name is never all-digits, so drop those (else the
+    # recommendation shows a bare number as the "name").
+    if building and building.strip().isdigit():
+        building = None
     address = g("所在地")
     if not address and not building:
         return None
