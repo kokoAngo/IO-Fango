@@ -133,6 +133,57 @@ class TestEnrich:
         assert len(calls) == 1  # negative cached → no re-lookup
 
 
+class TestBlockFallback:
+    """When HOMES blocks the browser, recover the URL via DuckDuckGo."""
+
+    _CHALLENGE = ('<html><head><title>Human Verification</title>'
+                  '<script src="https://x.token.awswaf.com/challenge.js"></script>'
+                  '<script>window.gokuProps={};</script></head></html>')
+    _NORMAL = '<html><head><title>【ホームズ】賃貸</title></head><body>…results…</body></html>'
+
+    _DDG = (
+        '<div class="result"><a class="result__a" '
+        'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.homes.co.jp%2Fchintai%2Froom%2Fabc123%2F&rut=z">'
+        'GENOVIA南麻布 - ホームズ</a></div>'
+        '<div class="result"><a class="result__a" '
+        'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fsuumo.jp%2Fchintai%2Fjnc_1%2F">other</a></div>'
+    )
+
+    def test_is_block_markup(self):
+        assert external_lookup._is_block_markup("Human Verification", "") is True
+        assert external_lookup._is_block_markup("", self._CHALLENGE) is True
+        assert external_lookup._is_block_markup("【ホームズ】賃貸", self._NORMAL) is False
+
+    def test_ddg_parse_extracts_homes_link(self):
+        urls = external_lookup._ddg_parse(self._DDG)
+        assert urls[0] == "https://www.homes.co.jp/chintai/room/abc123/"  # decoded, HOMES, first
+        assert all("suumo" not in u for u in urls)
+
+    def test_ddg_parse_none(self):
+        assert external_lookup._ddg_parse("<div>no links here</div>") == []
+
+    def test_find_listings_falls_back_on_block(self, monkeypatch):
+        # Browser reports the name blocked; DDG recovers the URL.
+        monkeypatch.setattr(external_lookup, "_run_isolated",
+                            lambda fn, *a, **k: {"results": {}, "blocked": ["B"]})
+        monkeypatch.setattr(external_lookup, "_ddg_find_homes",
+                            lambda name: {"url": "https://www.homes.co.jp/chintai/room/z/",
+                                          "source": "homes", "image": None, "title": None})
+        out = external_lookup.find_listings(["B"])
+        assert out["B"]["url"] == "https://www.homes.co.jp/chintai/room/z/"
+        assert out["B"]["image"] is None
+
+    def test_no_fallback_when_browser_succeeds(self, monkeypatch):
+        found = {"url": "https://www.homes.co.jp/chintai/room/ok/", "source": "homes",
+                 "image": "https://image1.homes.jp/a.jpg", "title": "T"}
+        monkeypatch.setattr(external_lookup, "_run_isolated",
+                            lambda fn, *a, **k: {"results": {"B": found}, "blocked": []})
+        monkeypatch.setattr(external_lookup, "_ddg_find_homes",
+                            lambda name: pytest.fail("DDG fallback must not run when HOMES succeeded"))
+        out = external_lookup.find_listings(["B"])
+        assert out["B"] == found
+
+
 class TestEnrichBatch:
     def test_enriches_up_to_three_in_one_session(self, a_post, listing_factory, monkeypatch):
         _, post_id = a_post

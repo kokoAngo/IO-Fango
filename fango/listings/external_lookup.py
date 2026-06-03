@@ -8,6 +8,11 @@ card whose building name equals ours, and read that room page's ``og:image`` /
 ``og:title`` in the same session. Returns the HOMES room URL + image + title so
 we can hand the customer a "rent it here" link with a photo.
 
+When HOMES escalates to a WAF / "Human Verification" challenge, the browser path
+raises :class:`HomesBlocked` and we **fall back to a DuckDuckGo search** for the
+building's HOMES page (URL only — we can't open HOMES to read its og:image while
+blocked). Controlled by ``FANGO_EXTERNAL_LOOKUP_FALLBACK`` (default on).
+
 Heavy + ToS-sensitive + brittle by nature — gated by ``FANGO_EXTERNAL_LOOKUP_ENABLED``,
 rate-limited, and cached per listing by the caller (:mod:`fango.listings.enrich`),
 so the browser runs at most once per building. SUUMO is intentionally dropped.
@@ -21,9 +26,16 @@ import logging
 import re
 import threading
 import unicodedata
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+from ..config import load_settings
 
 log = logging.getLogger(__name__)
+
+
+class HomesBlocked(Exception):
+    """Raised when HOMES serves an AWS WAF / CAPTCHA challenge instead of a real
+    page — the signal to fall back to a web-search lookup."""
 
 _TOP = "https://www.homes.co.jp/chintai/"
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -88,12 +100,43 @@ def _settle(page) -> None:
     page.wait_for_timeout(1500)
 
 
+# Markers of the AWS WAF challenge / CAPTCHA HOMES serves to suspected bots.
+_BLOCK_MARKERS = ("awswaf", "challenge.js", "gokuprops", "human verification")
+
+
+def _is_block_markup(title: str, html: str) -> bool:
+    """True when a page is an AWS WAF challenge rather than real content. Pure
+    (no Playwright) so it's unit-testable."""
+    t = (title or "").lower()
+    if "human verification" in t:
+        return True
+    h = (html or "").lower()
+    if any(m in h for m in _BLOCK_MARKERS):
+        # A real results page can legitimately be huge; the challenge page is
+        # tiny. Treat marker-bearing pages as blocked regardless of size — the
+        # markers are challenge-specific (awswaf/gokuProps), not on real pages.
+        return True
+    return False
+
+
+def _check_blocked(page) -> None:
+    try:
+        if _is_block_markup(page.title(), page.content()):
+            raise HomesBlocked()
+    except HomesBlocked:
+        raise
+    except Exception:
+        pass
+
+
 def _search_one(page, building_name: str) -> dict | None:
     """One freeword search on an already-open HOMES page: type the building
     name, submit, match the result card to our building, read its room page's
-    og:image/title. Returns {url, source, image, title} or None."""
+    og:image/title. Returns {url, source, image, title} or None.
+    Raises HomesBlocked if HOMES serves a WAF challenge."""
     page.goto(_TOP, wait_until="domcontentloaded", timeout=_TIMEOUT)
     _settle(page)
+    _check_blocked(page)
     box = page.locator('input[name="cond[freeword]"]').first
     box.click()
     box.fill(building_name)
@@ -103,6 +146,7 @@ def _search_one(page, building_name: str) -> dict | None:
     except Exception:
         pass
     page.wait_for_timeout(2000)
+    _check_blocked(page)
     href = page.evaluate(_MATCH_JS, building_name)
     if not href:
         return None
@@ -119,13 +163,17 @@ def _search_one(page, building_name: str) -> dict | None:
 
 def _browser_find_many(names: list[str]) -> dict:
     """Resolve several building names in ONE browser session (open HOMES once,
-    clear the WAF once, then search each). Returns {name: result|None}."""
+    clear the WAF once, then search each). Returns
+    ``{"results": {name: result|None}, "blocked": [names]}``. On a WAF challenge
+    the current + remaining names go into ``blocked`` for the search fallback.
+    If Playwright is unavailable, every name is reported blocked."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
         log.warning("playwright unavailable for HOMES lookup: %s", exc)
-        return {}
-    out: dict = {n: None for n in names}
+        return {"results": {}, "blocked": list(names)}
+    results: dict = {}
+    blocked: list[str] = []
     with sync_playwright() as p:
         browser = _launch(p)
         try:
@@ -135,12 +183,19 @@ def _browser_find_many(names: list[str]) -> dict:
             )
             ctx.add_init_script(_STEALTH)
             page = ctx.new_page()
-            for name in names:
+            for i, name in enumerate(names):
                 try:
-                    out[name] = _search_one(page, name)
+                    results[name] = _search_one(page, name)
+                except HomesBlocked:
+                    # WAF kicked in — abandon the browser path for this name and
+                    # everything after it; the caller will web-search these.
+                    log.info("HOMES blocked; %d name(s) deferred to web fallback", len(names) - i)
+                    blocked = list(names[i:])
+                    break
                 except Exception as exc:  # pragma: no cover - browser variance
                     log.debug("HOMES search failed for %r: %s", name, exc)
-            return out
+                    results[name] = None
+            return {"results": results, "blocked": blocked}
         finally:
             browser.close()
 
@@ -168,6 +223,61 @@ def _run_isolated(fn, *args, timeout: float = 70.0):
     return box.get("v")
 
 
+# ---------------------------------------------------------------------------
+# Fallback: when HOMES blocks our browser, recover the URL via a web search.
+# ---------------------------------------------------------------------------
+
+_DDG_HTML = "https://html.duckduckgo.com/html/"
+# DuckDuckGo wraps result links as //duckduckgo.com/l/?uddg=<encoded-target>.
+_DDG_REDIRECT_RE = re.compile(r'/l/\?(?:[^"\']*?&)?uddg=([^"&\']+)', re.I)
+_HOMES_LINK_RE = re.compile(r'https?://(?:www\.)?homes\.co\.jp/(?:chintai|mansion)/[^\s"\'<>]+', re.I)
+
+
+def _ddg_parse(html: str) -> list[str]:
+    """Extract HOMES listing URLs from DuckDuckGo HTML results, in order. Pure
+    (no network) → unit-testable. Decodes DDG's ``uddg`` redirect wrapper and
+    also catches any direct homes.co.jp links."""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for enc in _DDG_REDIRECT_RE.findall(html):
+        target = unquote(enc)
+        if _HOMES_LINK_RE.fullmatch(target) or _HOMES_LINK_RE.match(target):
+            if target not in seen:
+                seen.add(target)
+                urls.append(target)
+    for m in _HOMES_LINK_RE.findall(html):
+        if m not in seen:
+            seen.add(m)
+            urls.append(m)
+    return urls
+
+
+def _ddg_find_homes(building_name: str) -> dict | None:
+    """Web-search fallback: ask DuckDuckGo for the HOMES page of ``building_name``
+    and return the first homes.co.jp listing link. URL only (no og:image — HOMES
+    is blocking us). Best-effort, never raises."""
+    if not load_settings().external_lookup_fallback:
+        return None
+    name = (building_name or "").strip()
+    if not name:
+        return None
+    try:
+        import httpx
+        q = f"homes.co.jp {name} 賃貸"
+        with httpx.Client(timeout=8.0, follow_redirects=True,
+                          headers={"User-Agent": _UA, "Accept-Language": "ja,en;q=0.8"}) as c:
+            r = c.get(_DDG_HTML, params={"q": q, "kl": "jp-jp"})
+            if r.status_code >= 400:
+                return None
+            urls = _ddg_parse(r.text)
+    except Exception as exc:  # pragma: no cover - network variance
+        log.debug("DDG fallback failed for %r: %s", name, exc)
+        return None
+    if not urls:
+        return None
+    return {"url": urls[0], "source": "homes", "image": None, "title": None}
+
+
 def find_listing(building_name: str, *, source_url: str | None = None,
                  **_ignored) -> dict | None:
     """Find a HOMES listing for ``building_name``. Returns
@@ -181,17 +291,27 @@ def find_listing(building_name: str, *, source_url: str | None = None,
     name = (building_name or "").strip()
     if not name:
         return None
-    res = _run_isolated(_browser_find_many, [name], timeout=75.0) or {}
-    return res.get(name)
+    return find_listings([name]).get(name)
 
 
 def find_listings(names: list[str]) -> dict:
-    """Resolve several building names in a single browser session (open HOMES +
-    clear the WAF once, then search each). Returns ``{name: result|None}``.
+    """Resolve several building names. Tries HOMES in one browser session
+    (clear the WAF once, search each); for any name HOMES *blocked* us on, falls
+    back to a DuckDuckGo search to recover the URL. Returns ``{name: result|None}``.
     Best-effort, never raises."""
     clean = list(dict.fromkeys(n.strip() for n in (names or []) if n and n.strip()))
     if not clean:
         return {}
-    # ~roughly per-building budget + one WAF warm-up.
+    # ~per-building budget + one WAF warm-up.
     timeout = 40.0 + 30.0 * len(clean)
-    return _run_isolated(_browser_find_many, clean, timeout=timeout) or {}
+    out = _run_isolated(_browser_find_many, clean, timeout=timeout)
+    if out is None:  # timeout/crash → treat all as blocked, let the fallback try
+        out = {"results": {}, "blocked": clean}
+    results = dict(out.get("results") or {})
+    for name in out.get("blocked") or []:
+        if not results.get(name):
+            results[name] = _ddg_find_homes(name)
+    # Ensure every requested name has an entry.
+    for name in clean:
+        results.setdefault(name, None)
+    return results

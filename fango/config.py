@@ -67,6 +67,9 @@ class Settings:
     # default (incl. tests/dev); set FANGO_EXTERNAL_LOOKUP_ENABLED=1 to enable.
     external_lookup_enabled: bool
     external_lookup_ua: str
+    # When HOMES blocks the browser (WAF/CAPTCHA), recover the URL via a
+    # DuckDuckGo search. On by default; only fires on a detected block.
+    external_lookup_fallback: bool
 
 
 # A realistic desktop UA so SUUMO/HOMES return normal markup (not a bot page).
@@ -95,6 +98,7 @@ def load_settings() -> Settings:
         public_base_url=pub,
         external_lookup_enabled=_env_bool("FANGO_EXTERNAL_LOOKUP_ENABLED", False),
         external_lookup_ua=os.environ.get("FANGO_EXTERNAL_LOOKUP_UA") or _DEFAULT_LOOKUP_UA,
+        external_lookup_fallback=_env_bool("FANGO_EXTERNAL_LOOKUP_FALLBACK", True),
     )
 
 
