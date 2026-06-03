@@ -1102,6 +1102,9 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
     return out
 
 
+_MAX_TOPIC_LISTINGS = 3  # how many proposed listings a topic row shows when photo-less
+
+
 def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
     """Forum-index = a list of TOPICS (threads), each clickable into its full
     multi-turn conversation, ordered by recency (newest activity first). Returns
@@ -1146,41 +1149,44 @@ def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
                ORDER BY t.last_activity_at DESC""",
             params,
         ).fetchall()
-        # Per-thread listing-proposal summary: count + a representative listing
-        # (the one in the earliest post that proposed one). Lets a photo-less
-        # topic still show "🏠 …" so it reads as "has a property".
+        # Per-thread listing proposals (in proposal order). Lets a photo-less
+        # topic still show "🏠 …" so it reads as "has a property". We keep up to
+        # _MAX_TOPIC_LISTINGS distinct listings per thread.
         prop_rows = conn.execute(
-            f"""SELECT p.thread_id AS tid, COUNT(DISTINCT r.listing_id) AS n,
-                       MIN(p.id) AS minpid,
-                       l.building_name AS bn, l.address AS addr, l.structure AS st,
-                       l.layout AS layout, l.price_man AS price
-                FROM post_listing_refs r
-                JOIN posts p ON p.id = r.post_id
-                JOIN listings l ON l.id = r.listing_id
-                JOIN threads t ON t.id = p.thread_id
-                WHERE t.forum = ?
-                GROUP BY p.thread_id""",
+            """SELECT p.thread_id AS tid, r.id AS rid, r.listing_id AS lid,
+                      l.building_name AS bn, l.address AS addr, l.structure AS st,
+                      l.layout AS layout, l.price_man AS price
+               FROM post_listing_refs r
+               JOIN posts p ON p.id = r.post_id
+               JOIN listings l ON l.id = r.listing_id
+               JOIN threads t ON t.id = p.thread_id
+               WHERE t.forum = ?
+               ORDER BY p.thread_id, p.id, r.id""",
             (forum,),
         ).fetchall()
     finally:
         conn.close()
 
-    props = {pr["tid"]: pr for pr in prop_rows}
+    from collections import defaultdict
+    by_thread: dict[int, list] = defaultdict(list)
+    seen_label: dict[int, set] = defaultdict(set)  # dedupe by name (collapse same building)
+    for pr in prop_rows:
+        tid = pr["tid"]
+        label = ls.display_name(pr["bn"], pr["addr"], pr["st"]) or "物件"
+        if label in seen_label[tid] or len(by_thread[tid]) >= _MAX_TOPIC_LISTINGS:
+            continue
+        seen_label[tid].add(label)
+        by_thread[tid].append({
+            "label": label, "layout": pr["layout"], "price_man": pr["price"],
+        })
+
     feed = []
     for r in rows:
         thumb = r["lp_img"] or r["att_img"]
         if not thumb and r["li_lid"] is not None:
             thumb = _img_url(r["li_lid"], "raw", r["li_sort"] or 0)
-        item = {"thread": Thread.from_row(r), "post_count": r["post_count"],
-                "thumbnail": thumb, "listing_count": 0, "listing_label": None,
-                "listing_layout": None, "listing_price_man": None}
-        pr = props.get(r["id"])
-        if pr and pr["n"]:
-            item["listing_count"] = pr["n"]
-            item["listing_label"] = ls.display_name(pr["bn"], pr["addr"], pr["st"])
-            item["listing_layout"] = pr["layout"]
-            item["listing_price_man"] = pr["price"]
-        feed.append(item)
+        feed.append({"thread": Thread.from_row(r), "post_count": r["post_count"],
+                     "thumbnail": thumb, "listings": by_thread.get(r["id"], [])})
     # Already newest-activity-first from SQL; keep that pure time order (a photo
     # just shows inline, it does not change a topic's position).
     return feed

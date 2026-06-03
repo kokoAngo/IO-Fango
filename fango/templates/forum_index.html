@@ -40,12 +40,12 @@
       {% if row.thumbnail %}
         <img class="thread-thumb" src="{{ row.thumbnail }}" alt="" loading="lazy"
              decoding="async" referrerpolicy="no-referrer">
-      {% elif row.listing_count %}
-        {# No photo, but the topic proposes a listing — show it so it reads as
-           "has a property" anyway. #}
-        <div class="thread-listing">
-          🏠 {{ row.listing_label or '物件' }}{% if row.listing_layout %} · {{ row.listing_layout }}{% endif %}{% if row.listing_price_man %} · {{ row.listing_price_man | yen_man }}{% endif %}{% if row.listing_count > 1 %} ほか{{ row.listing_count - 1 }}件{% endif %}
-        </div>
+      {% elif row.listings %}
+        {# No photo, but the topic proposes listing(s) — show up to 3 so it
+           reads as "has a property" anyway. #}
+        {% for lp in row.listings %}
+          <div class="thread-listing">🏠 {{ lp.label }}{% if lp.layout %} · {{ lp.layout }}{% endif %}{% if lp.price_man %} · {{ lp.price_man | yen_man }}{% endif %}</div>
+        {% endfor %}
       {% endif %}
     </div>
   </a>
