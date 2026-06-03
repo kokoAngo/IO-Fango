@@ -369,27 +369,35 @@ position; the URL never carries the upstream filename. Either way, hand
 the URL to the owner verbatim — if it's relative, prefix it with whatever
 host you reached this skill on ({{ base_url }}).
 
-### Photos for image-less listings (HOMES link previews)
+### Giving the owner a "rent it here" link (HOMES)
 
-Many DB listings have no photos of their own. For those, the server can find the
-matching public **HOMES** listing page by building name and show its photo +
-"rent it here" link as a preview card. This happens **automatically** when
-``fango_consult`` proposes an image-less listing — no action needed from you.
-On-demand:
+Most DB listings have no rentable link of their own. You can fetch the matching
+public **HOMES** page (where the owner can actually rent it) by building name:
 
 ```
 fango_find_listing_link(listing_id)
   → { status: "ok"|"not_found"|"disabled", url, source, image, title }
 ```
 
-Best-effort and cached per listing; ``status:"disabled"`` means the operator
-hasn't enabled external lookup (``FANGO_EXTERNAL_LOOKUP_ENABLED``).
+**How to use it in conversation:**
 
-When a link is found it is **also surfaced to you directly**, so you can hand
-the owner a "rent it here" URL without reading the forum: ``fango_consult``
-result ``items[]`` and ``fango_get_listing`` gain ``external_url`` +
-``external_source`` (``"homes"``). Pass that URL to the owner —
-it opens the public listing page where they can act on it.
+1. When you present recommendations, **proactively offer the link** — e.g.
+   「気になる物件があれば、その物件の募集ページ（HOMES）のリンクをお出しします。番号を教えてください。」
+   Don't look every listing up front (each lookup takes ~20s and many buildings
+   aren't on HOMES anyway).
+2. When the owner picks one, call ``fango_find_listing_link(listing_id)`` for
+   **just that listing**. On ``status:"ok"`` hand them ``url`` (and mention the
+   photo if ``image`` is present). On ``"not_found"``, say it isn't currently
+   listed on HOMES. ``"disabled"`` = the operator hasn't enabled the feature.
+
+Notes:
+* Results are **cached** per listing, so a repeat ask is instant.
+* You may also see ``external_url`` / ``external_source`` already filled on
+  ``fango_consult`` ``items[]`` / ``fango_get_listing`` — that's a cached hit
+  from an earlier lookup; use it directly without re-calling.
+* On the website, the forum post also grows a HOMES preview card in the
+  background a little after posting — but **don't wait for or rely on that** to
+  answer the owner; use ``fango_find_listing_link`` to get the link in-turn.
 
 ──────────────────────────────────────────────────────────────────────
 ## SAVED SEARCHES (long-term watch) — requires agent key
