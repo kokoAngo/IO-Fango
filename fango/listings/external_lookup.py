@@ -58,19 +58,31 @@ _LINK_SEL = {
     "sale": 'a[href*="/mansion/b-"], a[href*="/kodate/b-"]',
 }
 
-# In the result page: first matching link whose surrounding card text contains
-# the building name (NFKC-folded). ``sel`` picks rent-room vs sale-building links.
+# In the result page: among links whose surrounding card text contains the
+# building name (NFKC-folded), prefer the one on the SAME floor (args.floor →
+# "<n>階"); fall back to the first building match. Returns {href, exact} where
+# exact=true means we matched the same floor. ``sel`` picks rent-room vs
+# sale-building links.
 _MATCH_JS = """(args) => {
   const norm = s => (s||'').normalize('NFKC').replace(/\\s+/g,'').toLowerCase();
   const key = norm(args.name);
   if (!key) return null;
+  const fl = args.floor ? (String(args.floor) + '階') : null;
   const links = document.querySelectorAll(args.sel);
+  let first = null;
   for (const a of links) {
     let el = a, txt = '';
-    for (let i=0; i<6 && el; i++) { el = el.parentElement; if (el) txt = el.innerText || ''; if (norm(txt).includes(key)) return a.href; }
+    for (let i=0; i<6 && el; i++) { el = el.parentElement; if (el) txt = el.innerText || ''; if (norm(txt).includes(key)) break; }
+    if (!norm(txt).includes(key)) continue;
+    if (first === null) first = a.href;
+    if (fl && txt.includes(fl)) return { href: a.href, exact: true };
   }
-  return null;
+  return first ? { href: first, exact: false } : null;
 }"""
+
+# Caveat shown on a HOMES preview when it isn't our exact unit (a different room
+# in the same building, or a sale building page that lists other units).
+_REF_NOTE = "同じ建物の別の住戸（参考。階・価格が異なる場合があります）"
 _OG_JS = """() => {
   const g = p => (document.querySelector(`meta[property="${p}"]`)
                  || document.querySelector(`meta[name="${p}"]`) || {}).content || null;
@@ -140,11 +152,13 @@ def _check_blocked(page) -> None:
         pass
 
 
-def _search_one(page, building_name: str, kind: str = "rent") -> dict | None:
+def _search_one(page, building_name: str, kind: str = "rent",
+                floor: int | None = None) -> dict | None:
     """One freeword search on an already-open HOMES page for the given ``kind``
     (rent → 賃貸 rooms, sale → 売買 buildings): type the building name, submit,
-    match the result card to our building, read that page's og:image/title.
-    Returns {url, source, image, title} or None.
+    prefer the result on the same ``floor`` as our listing, read its og:image/
+    title. Returns {url, source, image, title, note} (note set when it's NOT our
+    exact unit — a different room / a sale building page) or None.
     Raises HomesBlocked if HOMES serves a WAF challenge."""
     page.goto(_ENTRY.get(kind, _ENTRY["rent"]), wait_until="domcontentloaded", timeout=_TIMEOUT)
     _settle(page)
@@ -159,9 +173,12 @@ def _search_one(page, building_name: str, kind: str = "rent") -> dict | None:
         pass
     page.wait_for_timeout(2000)
     _check_blocked(page)
-    href = page.evaluate(_MATCH_JS, {"name": building_name, "sel": _LINK_SEL.get(kind, _LINK_SEL["rent"])})
-    if not href:
+    m = page.evaluate(_MATCH_JS, {"name": building_name,
+                                  "sel": _LINK_SEL.get(kind, _LINK_SEL["rent"]),
+                                  "floor": floor})
+    if not m:
         return None
+    href = m["href"]
     page.goto(href, wait_until="domcontentloaded", timeout=_TIMEOUT)
     _settle(page)
     og = page.evaluate(_OG_JS) or {}
@@ -170,15 +187,20 @@ def _search_one(page, building_name: str, kind: str = "rent") -> dict | None:
         "source": "homes",
         "image": og.get("image"),
         "title": (og.get("title") or "").strip() or None,
+        # Same-floor rental hit → treat as the unit (no caveat); anything else
+        # (different room, or a sale building page) → flag as a reference.
+        "note": None if m.get("exact") else _REF_NOTE,
     }
 
 
-def _browser_find_many(names: list[str], kind: str = "rent") -> dict:
-    """Resolve several building names of one ``kind`` in ONE browser session
-    (open HOMES once, clear the WAF once, then search each). Returns
-    ``{"results": {name: result|None}, "blocked": [names]}``. On a WAF challenge
-    the current + remaining names go into ``blocked`` for the search fallback.
-    If Playwright is unavailable, every name is reported blocked."""
+def _browser_find_many(targets: list[dict], kind: str = "rent") -> dict:
+    """Resolve several ``targets`` ({name, floor}) of one ``kind`` in ONE browser
+    session (open HOMES once, clear the WAF once, then search each, preferring
+    the same floor). Returns ``{"results": {name: result|None}, "blocked":
+    [names]}``. On a WAF challenge the current + remaining names go into
+    ``blocked`` for the search fallback. If Playwright is unavailable, every name
+    is reported blocked."""
+    names = [t["name"] for t in targets]
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
@@ -195,18 +217,18 @@ def _browser_find_many(names: list[str], kind: str = "rent") -> dict:
             )
             ctx.add_init_script(_STEALTH)
             page = ctx.new_page()
-            for i, name in enumerate(names):
+            for i, t in enumerate(targets):
                 try:
-                    results[name] = _search_one(page, name, kind)
+                    results[t["name"]] = _search_one(page, t["name"], kind, t.get("floor"))
                 except HomesBlocked:
                     # WAF kicked in — abandon the browser path for this name and
                     # everything after it; the caller will web-search these.
-                    log.info("HOMES blocked; %d name(s) deferred to web fallback", len(names) - i)
-                    blocked = list(names[i:])
+                    log.info("HOMES blocked; %d name(s) deferred to web fallback", len(targets) - i)
+                    blocked = [x["name"] for x in targets[i:]]
                     break
                 except Exception as exc:  # pragma: no cover - browser variance
-                    log.debug("HOMES search failed for %r: %s", name, exc)
-                    results[name] = None
+                    log.debug("HOMES search failed for %r: %s", t["name"], exc)
+                    results[t["name"]] = None
             return {"results": results, "blocked": blocked}
         finally:
             browser.close()
@@ -320,43 +342,54 @@ def _ddg_find_homes(building_name: str, kind: str = "rent") -> dict | None:
         return None
     if not urls:
         return None
-    return {"url": urls[0], "source": "homes", "image": None, "title": None}
+    # The web fallback can't tell which floor — always a same-building reference.
+    return {"url": urls[0], "source": "homes", "image": None, "title": None, "note": _REF_NOTE}
 
 
-def find_listing(building_name: str, *, kind: str = "rent",
+def find_listing(building_name: str, *, kind: str = "rent", floor: int | None = None,
                  source_url: str | None = None, **_ignored) -> dict | None:
-    """Find a HOMES listing for ``building_name`` (``kind`` = 'rent' | 'sale').
-    Returns ``{url, source, image, title}`` or None. Best-effort, never raises.
+    """Find a HOMES listing for ``building_name`` (``kind`` = 'rent' | 'sale'),
+    preferring the same ``floor``. Returns ``{url, source, image, title, note}``
+    or None. Best-effort, never raises.
 
-    If ``source_url`` is already a HOMES/SUUMO detail page, it's returned as-is
-    (no browser needed; image/title left None)."""
+    If ``source_url`` is already a HOMES/SUUMO detail page (our own listing's
+    URL), it's returned as-is — that's our exact unit, so no reference note."""
     if source_url and source_of_url(source_url):
         return {"url": source_url, "source": source_of_url(source_url),
-                "image": None, "title": None}
+                "image": None, "title": None, "note": None}
     name = (building_name or "").strip()
     if not name:
         return None
-    return find_listings([name], kind=kind).get(name)
+    return find_listings([{"name": name, "floor": floor}], kind=kind).get(name)
 
 
-def find_listings(names: list[str], kind: str = "rent") -> dict:
-    """Resolve several building names of one ``kind`` ('rent' | 'sale'). Tries
-    HOMES in one browser session (clear the WAF once, search each); for any name
-    HOMES *blocked* us on, falls back to a DuckDuckGo search to recover the URL.
-    Returns ``{name: result|None}``. Best-effort, never raises."""
-    clean = list(dict.fromkeys(n.strip() for n in (names or []) if n and n.strip()))
-    if not clean:
+def find_listings(targets, kind: str = "rent") -> dict:
+    """Resolve several ``targets`` of one ``kind`` ('rent' | 'sale'). Each target
+    is a ``{"name", "floor"}`` dict (a bare string is accepted as name-only).
+    Tries HOMES in one browser session (clear the WAF once, search each,
+    preferring the same floor); for any name HOMES *blocked* us on, falls back to
+    a DuckDuckGo search. Returns ``{name: result|None}``. Best-effort."""
+    norm: list[dict] = []
+    seen: set[str] = set()
+    for t in (targets or []):
+        if isinstance(t, str):
+            t = {"name": t, "floor": None}
+        name = (t.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        norm.append({"name": name, "floor": t.get("floor")})
+    if not norm:
         return {}
     # ~per-building budget + one WAF warm-up.
-    timeout = 40.0 + 30.0 * len(clean)
-    out = _run_isolated(_browser_find_many, clean, kind, timeout=timeout)
+    timeout = 40.0 + 30.0 * len(norm)
+    out = _run_isolated(_browser_find_many, norm, kind, timeout=timeout)
     if out is None:  # timeout/crash → treat all as blocked, let the fallback try
-        out = {"results": {}, "blocked": clean}
+        out = {"results": {}, "blocked": [t["name"] for t in norm]}
     results = dict(out.get("results") or {})
     for name in out.get("blocked") or []:
         if not results.get(name):
             results[name] = _ddg_find_homes(name, kind)
-    # Ensure every requested name has an entry.
-    for name in clean:
-        results.setdefault(name, None)
+    for t in norm:
+        results.setdefault(t["name"], None)
     return results

@@ -658,6 +658,13 @@ a.thread-row:hover .name {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+/* Caveat when the HOMES link isn't our exact unit (a same-building reference). */
+.link-preview-card .lp-note {
+  font-size: var(--text-2xs);
+  color: var(--warning, #c80);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
 
 /* === Right rail ========================================================== */
 .rail-section {

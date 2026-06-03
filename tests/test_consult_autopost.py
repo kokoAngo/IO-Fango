@@ -237,6 +237,44 @@ def test_no_exact_match_falls_back_to_near_options(tmp_db, install_engine):
     assert "近い条件" in body
 
 
+def test_listing_links_delivered_to_agent_across_turns(tmp_db, install_engine, monkeypatch):
+    # The HOMES link is enriched in the BACKGROUND, so it isn't ready on the turn
+    # that shows the listing — but it must reach the agent on a later turn via the
+    # response's ``listing_links``. Stub out the real background lookup and write
+    # the cache by hand to simulate enrichment completing between turns.
+    from fango.consult import autopost
+    from fango.db import connect
+    from fango.listings.enrich import _write_cache
+    monkeypatch.setattr(autopost, "_spawn_enrich", lambda *a, **k: None)
+
+    ls.insert_listing({
+        "reins_id": "L1", "building_name": "代々木テラス", "prefecture": "東京都",
+        "city": "渋谷区", "layout": "1LDK", "rent_yen": 150_000, "ad_status": "可",
+    })
+    install_engine(FakeEngine([
+        FakeIntent(state="ready", criteria_delta={"prefecture": "東京都", "layout": "1LDK"}),
+        FakeIntent(state="asking", ask_back="他のエリアは?"),
+    ], summary_text="代々木テラスはいかがでしょう。"))
+
+    out1 = _run_turn("東京 1LDK", session_id=None)
+    assert out1["listing_links"] == []                  # nothing resolved yet
+    lid = out1["results"]["items"][0]["id"]
+
+    # Background enrichment "completes": write the HOMES link to the cache.
+    conn = connect()
+    _write_cache(conn, lid, url="https://www.homes.co.jp/chintai/b-123/",
+                 source="homes", image_url="https://img.homes.co.jp/x.jpg",
+                 title="代々木テラス", status="ok")
+    conn.close()
+
+    out2 = _run_turn("他のエリアは?", session_id=out1["session_id"])
+    links = out2["listing_links"]
+    assert any(l["listing_id"] == lid
+               and l["url"] == "https://www.homes.co.jp/chintai/b-123/"
+               and l["image"] == "https://img.homes.co.jp/x.jpg"
+               for l in links)
+
+
 def test_moderation_block_skips_post(tmp_db, install_engine):
     # The moderation verdict is folded into intent extraction now.
     fake = FakeEngine([FakeIntent(state="asking", ask_back="駅は?", compliant=False)])

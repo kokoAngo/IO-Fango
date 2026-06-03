@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS listing_external_links (
     source      TEXT,
     image_url   TEXT,
     title       TEXT,
+    note        TEXT,   -- e.g. "同じ建物の別の部屋(参考)" when not our exact unit
     status      TEXT NOT NULL DEFAULT 'ok',   -- 'ok' | 'none' | 'error'
     checked_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );

@@ -69,6 +69,8 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     ``PRAGMA table_info`` and only add columns that are missing.
     """
     _add_missing_columns(conn, "listings", _LISTINGS_NEW_COLUMNS)
+    # listing_external_links gained a `note` (reference caveat) after first ship.
+    _add_missing_columns(conn, "listing_external_links", (("note", "TEXT"),))
     # Index references rent_yen which only exists after the ALTER above succeeds,
     # so it is created here (out of schema.sql) to handle the old-DB case.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_rent ON listings(rent_yen)")

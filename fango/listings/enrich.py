@@ -25,7 +25,7 @@ _CACHE_TTL_NONE = "-3 days"
 
 def _fresh_cache(conn, listing_id: int) -> dict | None:
     row = conn.execute(
-        """SELECT url, source, image_url, title, status
+        """SELECT url, source, image_url, title, note, status
              FROM listing_external_links
             WHERE listing_id = ?
               AND ( (status = 'ok'  AND checked_at > datetime('now', ?))
@@ -35,15 +35,17 @@ def _fresh_cache(conn, listing_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def _write_cache(conn, listing_id: int, *, url, source, image_url, title, status) -> None:
+def _write_cache(conn, listing_id: int, *, url, source, image_url, title, status,
+                 note=None) -> None:
     conn.execute(
         """INSERT INTO listing_external_links(
-               listing_id, url, source, image_url, title, status, checked_at)
-           VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+               listing_id, url, source, image_url, title, note, status, checked_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
            ON CONFLICT(listing_id) DO UPDATE SET
                url=excluded.url, source=excluded.source, image_url=excluded.image_url,
-               title=excluded.title, status=excluded.status, checked_at=excluded.checked_at""",
-        (listing_id, url, source, image_url, title, status),
+               title=excluded.title, note=excluded.note, status=excluded.status,
+               checked_at=excluded.checked_at""",
+        (listing_id, url, source, image_url, title, note, status),
     )
 
 
@@ -83,7 +85,7 @@ def resolve_external_link(listing_id: int, building_name: str | None = None,
                 return {
                     "url": cached["url"], "source": cached.get("source"),
                     "image_url": cached.get("image_url"), "title": cached.get("title"),
-                    "cached": True,
+                    "note": cached.get("note"), "cached": True,
                 }
             return None  # fresh negative cache → don't re-scrape
         if not allow_lookup:
@@ -96,12 +98,13 @@ def resolve_external_link(listing_id: int, building_name: str | None = None,
             return None
 
         row = conn.execute(
-            "SELECT building_name, url, transaction_type FROM listings WHERE id = ?",
+            "SELECT building_name, url, transaction_type, floor FROM listings WHERE id = ?",
             (listing_id,),
         ).fetchone()
         name = building_name or (row["building_name"] if row else None)
         source_url = row["url"] if row else None
         kind = _kind_of(row["transaction_type"] if row else None)
+        floor = row["floor"] if row else None
         if not name:
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
@@ -109,17 +112,19 @@ def resolve_external_link(listing_id: int, building_name: str | None = None,
 
         # One browser session returns url + og:image + og:title together
         # (HOMES is WAF-walled, so we can't refetch with httpx). We hotlink the
-        # HOMES image rather than self-host it. Sale rows search HOMES 売買.
-        found = external_lookup.find_listing(name, kind=kind, source_url=source_url)
+        # HOMES image rather than self-host it. Sale rows search HOMES 売買; we
+        # prefer the same floor and flag a reference (note) when it isn't ours.
+        found = external_lookup.find_listing(name, kind=kind, floor=floor, source_url=source_url)
         if not found or not found.get("url"):
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
             return None
         _write_cache(conn, listing_id, url=found["url"], source=found.get("source"),
-                     image_url=found.get("image"), title=found.get("title"), status="ok")
+                     image_url=found.get("image"), title=found.get("title"),
+                     note=found.get("note"), status="ok")
         return {"url": found["url"], "source": found.get("source"),
                 "image_url": found.get("image"), "title": found.get("title"),
-                "cached": False}
+                "note": found.get("note"), "cached": False}
     except Exception as exc:  # pragma: no cover - best effort
         log.warning("external-link resolve failed (listing %s): %s", listing_id, exc)
         return None
@@ -148,7 +153,8 @@ def enrich_post_with_listing_link(post_id: int, listing, conn=None) -> dict | No
             return {"attached": False, "reason": "no external link"}
         forum_core.attach_link_preview(
             post_id, link["url"], image_url=link.get("image_url"),
-            title=link.get("title"), source=link.get("source"), conn=conn,
+            title=link.get("title"), description=link.get("note"),
+            source=link.get("source"), conn=conn,
         )
         return {"attached": True, "url": link["url"],
                 "image_url": link.get("image_url"), "cached": link.get("cached", False)}
@@ -175,7 +181,7 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
         # Cache pass: attach cached hits now; queue uncached for one batch lookup
         # per kind (rent vs sale use different HOMES searches).
         from collections import defaultdict
-        pending: dict[str, list[tuple[int, str]]] = defaultdict(list)  # kind → [(id, name)]
+        pending: dict[str, list[tuple[int, str, int | None]]] = defaultdict(list)  # kind → [(id, name, floor)]
         for listing in listings:
             lid = _listing_id_of(listing)
             if not lid:
@@ -185,17 +191,19 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
                 if cached["status"] == "ok" and cached.get("url"):
                     forum_core.attach_link_preview(
                         post_id, cached["url"], image_url=cached.get("image_url"),
-                        title=cached.get("title"), source=cached.get("source"), conn=conn)
+                        title=cached.get("title"), description=cached.get("note"),
+                        source=cached.get("source"), conn=conn)
                 continue
             row = conn.execute(
-                "SELECT building_name, transaction_type FROM listings WHERE id = ?", (lid,)
+                "SELECT building_name, transaction_type, floor FROM listings WHERE id = ?", (lid,)
             ).fetchone()
             name = (listing.get("building_name") if isinstance(listing, dict) else None) \
                 or (row["building_name"] if row else None)
             if not name:
                 _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
                 continue
-            pending[_kind_of(row["transaction_type"] if row else None)].append((lid, name))
+            pending[_kind_of(row["transaction_type"] if row else None)].append(
+                (lid, name, row["floor"] if row else None))
 
         if not pending:
             return
@@ -207,15 +215,18 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
             return
 
         for kind, items in pending.items():
-            results = external_lookup.find_listings([n for _, n in items], kind=kind)
-            for lid, name in items:
+            results = external_lookup.find_listings(
+                [{"name": n, "floor": fl} for _, n, fl in items], kind=kind)
+            for lid, name, _fl in items:
                 found = results.get(name)
                 if found and found.get("url"):
                     _write_cache(conn, lid, url=found["url"], source=found.get("source"),
-                                 image_url=found.get("image"), title=found.get("title"), status="ok")
+                                 image_url=found.get("image"), title=found.get("title"),
+                                 note=found.get("note"), status="ok")
                     forum_core.attach_link_preview(
                         post_id, found["url"], image_url=found.get("image"),
-                        title=found.get("title"), source=found.get("source"), conn=conn)
+                        title=found.get("title"), description=found.get("note"),
+                        source=found.get("source"), conn=conn)
                 else:
                     _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
     except Exception as exc:  # pragma: no cover - best effort

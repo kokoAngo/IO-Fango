@@ -49,6 +49,49 @@ def _attach_external_links(briefs: list[dict], conn) -> None:
         if link and link.get("url"):
             b["external_url"] = link["url"]
             b["external_source"] = link.get("source")
+            if link.get("note"):
+                b["external_note"] = link["note"]
+
+
+def _session_listing_links(sess: _ss.ConsultSession, conn) -> list[dict[str, Any]]:
+    """Every HOMES link resolved so far for listings shown in THIS session, read
+    from the cache. Link enrichment runs in the background (~10s after a turn),
+    so a turn's own links usually aren't ready when it returns — but they land in
+    the cache shortly after and surface here on the next turn. Returns the
+    cumulative set, so the agent receives links across several turns even though
+    none were ready on turn 1."""
+    thread_id = getattr(sess, "log_thread_id", None)
+    if not thread_id:
+        return []
+    try:
+        from ..listings.enrich import resolve_external_link
+        rows = conn.execute(
+            """SELECT DISTINCT r.listing_id, l.building_name
+               FROM post_listing_refs r
+               JOIN posts p ON p.id = r.post_id
+               JOIN listings l ON l.id = r.listing_id
+               WHERE p.thread_id = ?""",
+            (thread_id,),
+        ).fetchall()
+    except Exception:  # pragma: no cover - best effort
+        return []
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        try:
+            link = resolve_external_link(r["listing_id"], r["building_name"],
+                                         conn=conn, allow_lookup=False)
+        except Exception:  # pragma: no cover - best effort
+            link = None
+        if link and link.get("url"):
+            out.append({
+                "listing_id": r["listing_id"],
+                "building_name": r["building_name"],
+                "url": link["url"],
+                "source": link.get("source"),
+                "image": link.get("image_url"),
+                "note": link.get("note"),
+            })
+    return out
 
 
 def register(mcp) -> None:
@@ -68,6 +111,12 @@ def register(mcp) -> None:
         Pass the ``session_id`` from a previous response back in to continue
         the same conversation.
 
+        ``listing_links`` carries public "rent it here" HOMES URLs (with a photo)
+        for the listings shown in this session. These are fetched in the
+        background, so the field is usually EMPTY on the turn that first shows a
+        listing and fills in on a later turn — call again (e.g. to refine or just
+        to check) to collect them; you can hand these URLs to the owner.
+
         Args:
             message: The current user turn (free-form Japanese or English).
             session_id: Continue an existing dialogue. Omit on the first call.
@@ -76,7 +125,8 @@ def register(mcp) -> None:
             dict with keys ``session_id``, ``reply``, ``state``
             ('asking' | 'ready' | 'done'), ``criteria_extracted``,
             ``results`` ({items, total}), ``suggested_next_tools``, ``turn``,
-            ``usage`` ({input_tokens, output_tokens}).
+            ``usage`` ({input_tokens, output_tokens}), and ``listing_links``
+            (list of {listing_id, building_name, url, source, image}).
         """
         # FastMCP runs a *sync* tool inline on the event loop, so the multi-second
         # Gemini calls + DB writes inside _run_turn would freeze every concurrent
@@ -250,6 +300,10 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             conn=conn,
         )
 
+        # HOMES "rent it here" links resolved so far for this session's listings
+        # (accumulates across turns as background enrichment completes).
+        listing_links = _session_listing_links(sess, conn)
+
         return _envelope(
             sess,
             reply=reply, state=state,
@@ -259,6 +313,7 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             usage_in=usage_in, usage_out=usage_out,
             turn_override=sess.total_turns + 1,
             post_status=post_status,
+            listing_links=listing_links,
         )
     finally:
         conn.close()
@@ -314,6 +369,7 @@ def _rate_limited_envelope(session_id: str | None) -> dict[str, Any]:
         "usage": {"input_tokens": 0, "output_tokens": 0},
         "post_status": {"posted": False, "forum": None, "thread_id": None,
                         "reason": "rate limited"},
+        "listing_links": [],
     }
 
 
@@ -336,6 +392,7 @@ def _envelope(
     criteria: dict[str, Any] | None = None,
     turn_override: int | None = None,
     post_status: dict[str, Any] | None = None,
+    listing_links: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "session_id": sess.id,
@@ -349,4 +406,7 @@ def _envelope(
         # Whether this turn was published to a forum, and why not if held back.
         "post_status": post_status or {"posted": False, "forum": None,
                                        "thread_id": None, "reason": ""},
+        # HOMES "rent it here" links for this session's listings, resolved so far.
+        # Background-enriched, so empty on turn 1 and fills in over later turns.
+        "listing_links": listing_links or [],
     }

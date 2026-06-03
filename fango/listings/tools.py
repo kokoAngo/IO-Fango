@@ -364,8 +364,10 @@ def register(mcp) -> None:
         if listing is None:
             return None
         ttype = listing.extra.get("transaction_type") if isinstance(listing.extra, dict) else None
+        floor = listing.extra.get("floor") if isinstance(listing.extra, dict) else None
+        floor = floor if floor is not None else getattr(listing, "floor", None)
         found = external_lookup.find_listing(
-            listing.building_name, kind=_kind_of(ttype), source_url=listing.url,
+            listing.building_name, kind=_kind_of(ttype), floor=floor, source_url=listing.url,
         )
         if not found or not found.get("url"):
             return {"status": "not_found", "listing_id": listing_id,
@@ -378,4 +380,7 @@ def register(mcp) -> None:
             "source": found.get("source"),
             "image": found.get("image"),
             "title": found.get("title"),
+            # Set when it's NOT our exact unit (a different room / building page);
+            # tell the owner so the floor/price difference isn't surprising.
+            "note": found.get("note"),
         }

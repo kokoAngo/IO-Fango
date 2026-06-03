@@ -75,6 +75,7 @@
         {% endif %}
         <div class="lp-body">
           <div class="lp-title" lang="ja">{{ lp.title or lp.url }}</div>
+          {% if lp.description %}<div class="lp-note" lang="ja">※ {{ lp.description }}</div>{% endif %}
           <div class="lp-source">{{ lp.source or 'link' }} ↗</div>
         </div>
       </a>

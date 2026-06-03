@@ -179,7 +179,7 @@ class TestBlockFallback:
         def fake_find_listings(names, kind="rent"):
             seen["kind"] = kind
             return {n: {"url": "https://www.homes.co.jp/mansion/b-1/", "source": "homes",
-                        "image": None, "title": None} for n in names}
+                        "image": None, "title": None} for n in (t['name'] if isinstance(t,dict) else t for t in names)}
         monkeypatch.setattr(external_lookup, "find_listings", fake_find_listings)
         enrich.enrich_post_with_listings(post_id, [{"id": sale.id, "building_name": "売マンションX"}])
         assert seen["kind"] == "sale"   # sale listing routed to HOMES 売買 search
@@ -217,7 +217,7 @@ class TestEnrichBatch:
         calls: list = []
 
         def fake_find_listings(names, kind=None):
-            calls.append(list(names))
+            calls.append([t["name"] if isinstance(t, dict) else t for t in names])
             return {
                 "GENOVIA南麻布": {"url": "https://www.homes.co.jp/chintai/room/aaa/",
                                   "source": "homes", "image": "https://image1.homes.jp/a.jpg", "title": "A"},
@@ -249,7 +249,7 @@ class TestEnrichBatch:
 
         calls: list = []
         def fake_find_listings(names, kind=None):
-            calls.append(list(names))
+            calls.append([t["name"] if isinstance(t, dict) else t for t in names])
             return {"Fresh": {"url": "https://www.homes.co.jp/chintai/room/fff/", "source": "homes",
                               "image": None, "title": "F"}}
         monkeypatch.setattr(external_lookup, "find_listings", fake_find_listings)
