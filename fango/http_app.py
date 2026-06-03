@@ -321,6 +321,30 @@ def _owner_allowed_ips() -> frozenset[str]:
     return frozenset(p.strip() for p in raw.split(",") if p.strip())
 
 
+def _ip_allowed(client_ip: str) -> bool:
+    """Owner allowlist membership, with CIDR support. An entry can be a bare IP
+    (exact match) or a network like ``240b:c010:460:2a9b::/64`` — useful for a
+    home IPv6 line where the host bits rotate but the /64 prefix is stable."""
+    entries = _owner_allowed_ips()
+    if not entries or not client_ip:
+        return False
+    if client_ip in entries:
+        return True
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    for e in entries:
+        if "/" in e:
+            try:
+                if ip in ipaddress.ip_network(e, strict=False):
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
 class ScraperGuardMiddleware:
     """Front-line defence on the public read surface.
 
@@ -338,6 +362,19 @@ class ScraperGuardMiddleware:
     @staticmethod
     def _is_protected_path(path: str) -> bool:
         return any(path.startswith(p) for p in _PUBLIC_READ_PREFIXES)
+
+    @staticmethod
+    def _is_rate_counted(path: str) -> bool:
+        """Whether this request counts against the per-IP browse quota. Image
+        subresources (a single page pulls many listing thumbnails) and long-lived
+        SSE streams are pulled in while legitimately viewing one page, so counting
+        them would lock a real visitor out after a couple of clicks. They still go
+        through the bot-UA gate above — this only spares them the per-IP cap."""
+        if path.startswith("/listings/img/"):
+            return False
+        if path.endswith("/stream"):
+            return False
+        return True
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -372,7 +409,7 @@ class ScraperGuardMiddleware:
         # MCP-side per-key limiter instead). Owner / staff IPs listed in
         # FANGO_PUBLIC_READ_IP_ALLOWLIST skip the cap so refreshing during
         # debugging doesn't lock you out of your own site.
-        if not agent_key and client_ip not in _owner_allowed_ips():
+        if not agent_key and self._is_rate_counted(path) and not _ip_allowed(client_ip):
             from .rate_limit import PUBLIC_READ_IP, RateLimitError, check_and_record
             try:
                 check_and_record("public_read_ip", client_ip, PUBLIC_READ_IP)
@@ -785,24 +822,19 @@ def _register_routes(app: FastAPI) -> None:
         # 一時停止: wiki 栏目。再開する時はこの 2 行のコメントを外す。
         # if forum == "wiki":
         #     return await wiki_index(request, q)
-        svc = _service_or_404(forum)
-        # Whole-section feed: image-bearing posts as rich cards on top, the
-        # remaining title-only threads below. The live "動態" feed lives on home.
-        image_posts, title_threads = _forum_feed(forum)
+        _service_or_404(forum)
+        # The section is a list of topics (threads), each clickable into its
+        # full conversation; a photo from anywhere in the thread shows after the
+        # title. Photo-bearing topics first. The live "動態" feed lives on home.
         ctx = shared_ctx(request, active_forum=forum)
-        ctx.update({"forum": forum, "image_posts": image_posts,
-                    "title_threads": title_threads, "tag": None, "q": q,
-                    "authors": _resolve_authors(r["post"].author_id for r in image_posts)})
+        ctx.update({"forum": forum, "feed": _forum_feed(forum), "tag": None, "q": q})
         return templates.TemplateResponse(request, "forum_index.html", ctx)
 
     @app.get("/{forum}/tag/{tag}", response_class=HTMLResponse)
     async def forum_tag(forum: str, tag: str, request: Request):
-        svc = _service_or_404(forum)
-        threads = svc.list_threads(tag=tag)
+        _service_or_404(forum)
         ctx = shared_ctx(request, active_forum=forum)
-        ctx.update({"forum": forum, "image_posts": [],
-                    "title_threads": threads, "tag": tag, "q": None,
-                    "authors": {}})
+        ctx.update({"forum": forum, "feed": _forum_feed(forum, tag=tag), "tag": tag, "q": None})
         return templates.TemplateResponse(request, "forum_index.html", ctx)
 
     @app.get("/{forum}/t/{thread_id}", response_class=HTMLResponse)
@@ -1070,69 +1102,64 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
     return out
 
 
-def _forum_feed(forum: str) -> tuple[list[dict], list[dict]]:
-    """Forum-index feed showing ALL threads, split into two tiers:
-    (1) image-bearing posts → rich cards (newest first, one per thread), and
-    (2) the remaining title-only threads. "Has image" = a HOMES link-preview
-    image, an uploaded attachment, or a referenced listing's own photo."""
+def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
+    """Forum-index = a list of TOPICS (threads), each clickable into its full
+    multi-turn conversation. Returns ``[{thread, post_count, thumbnail}]`` where
+    ``thumbnail`` is a representative photo from anywhere in the thread (a HOMES
+    link-preview image, an uploaded attachment, or a referenced listing's own
+    photo) or None. Threads with a photo sort first; then newest activity. ALL
+    threads are listed."""
+    from .listings.tools import _img_url
+    from .models import Thread
+
+    join = ""
+    params: list = [forum]
+    where = "t.forum = ?"
+    if tag:
+        join = ("JOIN posts tp ON tp.thread_id = t.id "
+                "JOIN post_tags pt ON pt.post_id = tp.id")
+        where += " AND pt.tag = ?"
+        params.append(tag)
+
     conn = connect()
     try:
-        img_rows = conn.execute(
-            """SELECT p.*, t.forum AS forum, t.title AS thread_title
-               FROM posts p JOIN threads t ON t.id = p.thread_id
-               WHERE t.forum = ? AND (
-                   EXISTS(SELECT 1 FROM post_link_previews lp
-                          WHERE lp.post_id = p.id AND lp.image_url IS NOT NULL)
-                   OR EXISTS(SELECT 1 FROM post_attachments pa WHERE pa.post_id = p.id)
-                   OR EXISTS(SELECT 1 FROM post_listing_refs r
-                             JOIN listing_images li ON li.listing_id = r.listing_id
-                             WHERE r.post_id = p.id AND li.kind = 'raw'))
-               ORDER BY p.created_at DESC""",
-            (forum,),
+        rows = conn.execute(
+            f"""SELECT DISTINCT t.*,
+                   (SELECT COUNT(*) FROM posts WHERE thread_id = t.id) AS post_count,
+                   (SELECT lp.image_url FROM post_link_previews lp JOIN posts p ON p.id = lp.post_id
+                      WHERE p.thread_id = t.id AND lp.image_url IS NOT NULL
+                      ORDER BY p.id LIMIT 1) AS lp_img,
+                   (SELECT pa.url FROM post_attachments pa JOIN posts p ON p.id = pa.post_id
+                      WHERE p.thread_id = t.id ORDER BY p.id, pa.sort_order LIMIT 1) AS att_img,
+                   (SELECT li.listing_id FROM post_listing_refs r
+                      JOIN listing_images li ON li.listing_id = r.listing_id
+                      JOIN posts p ON p.id = r.post_id
+                      WHERE p.thread_id = t.id AND li.kind = 'raw'
+                      ORDER BY p.id, li.sort_order LIMIT 1) AS li_lid,
+                   (SELECT li.sort_order FROM post_listing_refs r
+                      JOIN listing_images li ON li.listing_id = r.listing_id
+                      JOIN posts p ON p.id = r.post_id
+                      WHERE p.thread_id = t.id AND li.kind = 'raw'
+                      ORDER BY p.id, li.sort_order LIMIT 1) AS li_sort
+               FROM threads t {join}
+               WHERE {where}
+               ORDER BY t.last_activity_at DESC""",
+            params,
         ).fetchall()
-        # One rich card per thread (its newest image-bearing post).
-        seen: set[int] = set()
-        img_dedup = []
-        for r in img_rows:
-            if r["thread_id"] in seen:
-                continue
-            seen.add(r["thread_id"])
-            img_dedup.append(r)
-        # Title-only tier: every other thread, newest activity first.
-        if seen:
-            ph = ",".join("?" * len(seen))
-            title_rows = conn.execute(
-                f"""SELECT t.*, (SELECT COUNT(*) FROM posts WHERE thread_id = t.id) AS post_count
-                    FROM threads t WHERE t.forum = ? AND t.id NOT IN ({ph})
-                    ORDER BY t.last_activity_at DESC""",
-                (forum, *seen),
-            ).fetchall()
-        else:
-            title_rows = conn.execute(
-                """SELECT t.*, (SELECT COUNT(*) FROM posts WHERE thread_id = t.id) AS post_count
-                   FROM threads t WHERE t.forum = ? ORDER BY t.last_activity_at DESC""",
-                (forum,),
-            ).fetchall()
     finally:
         conn.close()
-    from .models import Post, Thread
-    ids = [r["id"] for r in img_dedup]
-    listing_refs = _resolve_listing_refs(ids)
-    attachments = _resolve_attachments(ids)
-    link_previews = _resolve_link_previews(ids)
-    tags = _resolve_tags(ids)
-    likes = _resolve_likes(ids)
-    image_posts = []
-    for r in img_dedup:
-        p = Post.from_row(r)
-        p.tags = tags.get(p.id, [])
-        p.listing_refs = listing_refs.get(p.id, [])
-        p.attachments = attachments.get(p.id, [])
-        p.link_previews = link_previews.get(p.id, [])
-        p.like_count = likes.get(p.id, 0)
-        image_posts.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
-    title_threads = [{"thread": Thread.from_row(r), "post_count": r["post_count"]} for r in title_rows]
-    return image_posts, title_threads
+
+    feed = []
+    for r in rows:
+        thumb = r["lp_img"] or r["att_img"]
+        if not thumb and r["li_lid"] is not None:
+            thumb = _img_url(r["li_lid"], "raw", r["li_sort"] or 0)
+        feed.append({"thread": Thread.from_row(r), "post_count": r["post_count"],
+                     "thumbnail": thumb})
+    # Topics with a photo first; stable sort keeps the newest-activity order
+    # within each group.
+    feed.sort(key=lambda x: x["thumbnail"] is None)
+    return feed
 
 
 def _resolve_attachments(post_ids: list[int]) -> dict[int, list]:

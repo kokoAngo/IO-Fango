@@ -47,7 +47,7 @@ CLAIM_IP = Quota(3, 3600)
 # has no X-Agent-Key. Generous for casual browsing, tight enough to make a
 # scraper visible. The owner / staff bypass this via the IP allow-list
 # (see ScraperGuardMiddleware).
-PUBLIC_READ_IP = Quota(60, 3600)
+PUBLIC_READ_IP = Quota(300, 3600)
 # Read MCP tools, keyed per agent. Real agents serving real owners will sit
 # far below this; one going haywire (or pretending to be agent traffic
 # while scraping) hits the cap.

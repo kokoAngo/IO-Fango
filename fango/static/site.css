@@ -584,6 +584,19 @@ a.thread-row:hover .name {
 }
 .listing-card.has-thumb .lc-head { margin-bottom: 4px; }
 
+/* Forum-index topic row: a representative photo from anywhere in the thread,
+   shown under the title. Capped so the topic list stays scannable. */
+.thread-row .thread-thumb {
+  display: block;
+  margin-top: var(--space-2);
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+}
+
 /* OGP link-preview card — an unfurled external listing link (SUUMO/HOMES)
    with a self-hosted og:image. Same shell as .listing-card.has-thumb. */
 .link-preview-card {
