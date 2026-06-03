@@ -1146,16 +1146,41 @@ def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
                ORDER BY t.last_activity_at DESC""",
             params,
         ).fetchall()
+        # Per-thread listing-proposal summary: count + a representative listing
+        # (the one in the earliest post that proposed one). Lets a photo-less
+        # topic still show "🏠 …" so it reads as "has a property".
+        prop_rows = conn.execute(
+            f"""SELECT p.thread_id AS tid, COUNT(DISTINCT r.listing_id) AS n,
+                       MIN(p.id) AS minpid,
+                       l.building_name AS bn, l.address AS addr, l.structure AS st,
+                       l.layout AS layout, l.price_man AS price
+                FROM post_listing_refs r
+                JOIN posts p ON p.id = r.post_id
+                JOIN listings l ON l.id = r.listing_id
+                JOIN threads t ON t.id = p.thread_id
+                WHERE t.forum = ?
+                GROUP BY p.thread_id""",
+            (forum,),
+        ).fetchall()
     finally:
         conn.close()
 
+    props = {pr["tid"]: pr for pr in prop_rows}
     feed = []
     for r in rows:
         thumb = r["lp_img"] or r["att_img"]
         if not thumb and r["li_lid"] is not None:
             thumb = _img_url(r["li_lid"], "raw", r["li_sort"] or 0)
-        feed.append({"thread": Thread.from_row(r), "post_count": r["post_count"],
-                     "thumbnail": thumb})
+        item = {"thread": Thread.from_row(r), "post_count": r["post_count"],
+                "thumbnail": thumb, "listing_count": 0, "listing_label": None,
+                "listing_layout": None, "listing_price_man": None}
+        pr = props.get(r["id"])
+        if pr and pr["n"]:
+            item["listing_count"] = pr["n"]
+            item["listing_label"] = ls.display_name(pr["bn"], pr["addr"], pr["st"])
+            item["listing_layout"] = pr["layout"]
+            item["listing_price_man"] = pr["price"]
+        feed.append(item)
     # Already newest-activity-first from SQL; keep that pure time order (a photo
     # just shows inline, it does not change a topic's position).
     return feed
