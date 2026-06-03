@@ -786,12 +786,13 @@ def _register_routes(app: FastAPI) -> None:
         # if forum == "wiki":
         #     return await wiki_index(request, q)
         svc = _service_or_404(forum)
-        threads = svc.list_threads()
-        recent = _recent_posts_in_forum(forum)
+        # Whole-section feed: image-bearing posts as rich cards on top, the
+        # remaining title-only threads below. The live "動態" feed lives on home.
+        image_posts, title_threads = _forum_feed(forum)
         ctx = shared_ctx(request, active_forum=forum)
-        ctx.update({"forum": forum, "threads": threads, "tag": None, "q": q,
-                    "recent_posts": recent,
-                    "authors": _resolve_authors(r["post"].author_id for r in recent)})
+        ctx.update({"forum": forum, "image_posts": image_posts,
+                    "title_threads": title_threads, "tag": None, "q": q,
+                    "authors": _resolve_authors(r["post"].author_id for r in image_posts)})
         return templates.TemplateResponse(request, "forum_index.html", ctx)
 
     @app.get("/{forum}/tag/{tag}", response_class=HTMLResponse)
@@ -799,8 +800,9 @@ def _register_routes(app: FastAPI) -> None:
         svc = _service_or_404(forum)
         threads = svc.list_threads(tag=tag)
         ctx = shared_ctx(request, active_forum=forum)
-        ctx.update({"forum": forum, "threads": threads, "tag": tag, "q": None,
-                    "recent_posts": []})
+        ctx.update({"forum": forum, "image_posts": [],
+                    "title_threads": threads, "tag": tag, "q": None,
+                    "authors": {}})
         return templates.TemplateResponse(request, "forum_index.html", ctx)
 
     @app.get("/{forum}/t/{thread_id}", response_class=HTMLResponse)
@@ -1066,6 +1068,71 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
         p.like_count = likes.get(p.id, 0)
         out.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
     return out
+
+
+def _forum_feed(forum: str) -> tuple[list[dict], list[dict]]:
+    """Forum-index feed showing ALL threads, split into two tiers:
+    (1) image-bearing posts → rich cards (newest first, one per thread), and
+    (2) the remaining title-only threads. "Has image" = a HOMES link-preview
+    image, an uploaded attachment, or a referenced listing's own photo."""
+    conn = connect()
+    try:
+        img_rows = conn.execute(
+            """SELECT p.*, t.forum AS forum, t.title AS thread_title
+               FROM posts p JOIN threads t ON t.id = p.thread_id
+               WHERE t.forum = ? AND (
+                   EXISTS(SELECT 1 FROM post_link_previews lp
+                          WHERE lp.post_id = p.id AND lp.image_url IS NOT NULL)
+                   OR EXISTS(SELECT 1 FROM post_attachments pa WHERE pa.post_id = p.id)
+                   OR EXISTS(SELECT 1 FROM post_listing_refs r
+                             JOIN listing_images li ON li.listing_id = r.listing_id
+                             WHERE r.post_id = p.id AND li.kind = 'raw'))
+               ORDER BY p.created_at DESC""",
+            (forum,),
+        ).fetchall()
+        # One rich card per thread (its newest image-bearing post).
+        seen: set[int] = set()
+        img_dedup = []
+        for r in img_rows:
+            if r["thread_id"] in seen:
+                continue
+            seen.add(r["thread_id"])
+            img_dedup.append(r)
+        # Title-only tier: every other thread, newest activity first.
+        if seen:
+            ph = ",".join("?" * len(seen))
+            title_rows = conn.execute(
+                f"""SELECT t.*, (SELECT COUNT(*) FROM posts WHERE thread_id = t.id) AS post_count
+                    FROM threads t WHERE t.forum = ? AND t.id NOT IN ({ph})
+                    ORDER BY t.last_activity_at DESC""",
+                (forum, *seen),
+            ).fetchall()
+        else:
+            title_rows = conn.execute(
+                """SELECT t.*, (SELECT COUNT(*) FROM posts WHERE thread_id = t.id) AS post_count
+                   FROM threads t WHERE t.forum = ? ORDER BY t.last_activity_at DESC""",
+                (forum,),
+            ).fetchall()
+    finally:
+        conn.close()
+    from .models import Post, Thread
+    ids = [r["id"] for r in img_dedup]
+    listing_refs = _resolve_listing_refs(ids)
+    attachments = _resolve_attachments(ids)
+    link_previews = _resolve_link_previews(ids)
+    tags = _resolve_tags(ids)
+    likes = _resolve_likes(ids)
+    image_posts = []
+    for r in img_dedup:
+        p = Post.from_row(r)
+        p.tags = tags.get(p.id, [])
+        p.listing_refs = listing_refs.get(p.id, [])
+        p.attachments = attachments.get(p.id, [])
+        p.link_previews = link_previews.get(p.id, [])
+        p.like_count = likes.get(p.id, 0)
+        image_posts.append({"post": p, "forum": r["forum"], "thread_title": r["thread_title"]})
+    title_threads = [{"thread": Thread.from_row(r), "post_count": r["post_count"]} for r in title_rows]
+    return image_posts, title_threads
 
 
 def _resolve_attachments(post_ids: list[int]) -> dict[int, list]:

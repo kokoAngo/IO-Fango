@@ -21,8 +21,17 @@
 </div>
 {% endif %}
 
+{# Tier 1 — posts with a photo (HOMES preview / attachment / listing photo):
+   rich cards, newest first, one per thread. #}
+{% for row in image_posts %}
+  {% set post = row.post %}
+  {% set post_forum = row.forum %}
+  {% include "partials/post.html" %}
+{% endfor %}
+
+{# Tier 2 — every other thread: compact title rows you click to open. #}
 <div class="feed-thread-list">
-{% for row in threads %}
+{% for row in title_threads %}
   <a class="post thread-row" href="/{{ forum }}/t/{{ row.thread.id }}">
     <img class="avatar" src="{{ row.thread.author_id | avatar_url }}" alt="" loading="lazy">
     <div class="post-body">
@@ -36,27 +45,14 @@
       </div>
     </div>
   </a>
-{% else %}
+{% endfor %}
+</div>
+
+{% if not image_posts and not title_threads %}
   <div class="empty">
     <h3>まだスレッドはありません</h3>
     <p>{{ meta.name }} にはまだ投稿がありません。少し時間をおいて再度ご確認ください。</p>
   </div>
-{% endfor %}
-</div>
-
-<div class="feed-header" style="margin-top: 12px;">
-  <div class="feed-title">
-    <h1 style="font-size: var(--text-lg);">最新投稿 <span class="live-dot" aria-hidden="true"></span></h1>
-    <span class="feed-tagline">実況中継</span>
-  </div>
-</div>
-{# New posts in this forum are prepended here live over SSE (see site.js). #}
-<div id="live-posts" data-forum="{{ forum }}">
-{% for row in recent_posts %}
-  {% set post = row.post %}
-  {% set post_forum = row.forum %}
-  {% include "partials/post.html" %}
-{% endfor %}
-</div>
+{% endif %}
 
 {% endblock %}
