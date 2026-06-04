@@ -1,0 +1,48 @@
+# systemd unit for the Fango.city web server.
+#
+# Install on a Linux server:
+#   1. Edit the three <PLACEHOLDER> paths below to match your checkout.
+#   2. sudo cp deploy/fango.service /etc/systemd/system/fango.service
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now fango
+#   5. journalctl -u fango -f         # watch logs
+#
+# Restart after a deploy:  sudo systemctl restart fango
+#
+# NOTE: single process only — see start.sh. Do not add uvicorn --workers.
+
+[Unit]
+Description=Fango.city web server (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The OS user that owns the checkout. Create a dedicated unprivileged user
+# rather than running as root.
+User=fango
+Group=fango
+
+# Absolute path to the repo checkout.
+WorkingDirectory=/opt/fango/AIAgent2
+
+# Loads every KEY=value from .env into the process environment (NOTION_TOKEN,
+# GEMINI_API_KEY, FANGO_AGENT_KEY, FANGO_GA_ID, FANGO_HOST, FANGO_PORT, …).
+# This is the systemd equivalent of start.sh sourcing .env. The leading '-'
+# means "don't fail if the file is briefly missing".
+EnvironmentFile=-/opt/fango/AIAgent2/.env
+
+# start.sh re-reads .env and binds to $FANGO_HOST:$FANGO_PORT (single worker).
+ExecStart=/opt/fango/AIAgent2/start.sh
+
+Restart=always
+RestartSec=3
+# Give in-flight SSE streams / browser lookups a moment to wind down.
+TimeoutStopSec=20
+
+# Light hardening (optional; relax if it conflicts with Playwright/Chrome).
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
