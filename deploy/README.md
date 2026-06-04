@@ -30,6 +30,26 @@ keys: `NOTION_TOKEN`, `NOTION_LISTINGS_DATABASE_ID`, `NOTION_SALE_DATABASE_ID`,
 `FANGO_HOST=127.0.0.1` when a reverse proxy or ngrok runs on the same box; set
 `0.0.0.0` only for direct public access.
 
+### MCP host allowlist — REQUIRED in production
+
+The `/mcp` and `/mcp2` subtrees are guarded by a Host-header allowlist
+(`FANGO_MCP_ALLOWED_HOSTS`, a DNS-rebinding defence). It **defaults to
+`localhost,127.0.0.1`**, so an agent hitting `http://fango.city/mcp2/mcp` gets:
+
+```
+403  host 'fango.city' not allowed for /mcp
+```
+
+Fix: list every public host the MCP endpoint is reached by (comma-separated;
+`*.` wildcards allowed), keeping localhost for health checks:
+
+```
+FANGO_MCP_ALLOWED_HOSTS=fango.city,www.fango.city,localhost,127.0.0.1
+```
+
+Then restart. This is the single most common "agent can't connect" cause on a
+fresh deploy — the host the client sends must be in this list.
+
 ## Run it
 
 Foreground / quick test:
