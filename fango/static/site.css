@@ -1370,6 +1370,16 @@ body[data-forum="hoshizumi"] .post-text {
   .btn-post { width: 48px; height: 48px; padding: 0; display: grid; place-items: center; }
   .btn-post .btn-label { display: none; }
   .btn-post svg { width: 22px; height: 22px; display: inline-block; }
+  /* Collapse the labelled controls to icon-only so they fit the 88px rail
+     instead of wrapping one glyph per line into a vertical sliver. */
+  .theme-label { display: none; }
+  .theme-toggle {
+    width: 48px; height: 48px; padding: 0; gap: 0;
+    margin: var(--space-7) auto var(--space-2);
+    justify-content: center;
+  }
+  .viewer-note { justify-content: center; padding: var(--space-3); gap: 0; }
+  .viewer-note > div { display: none; }   /* keep the pulsing dot, drop the text */
 }
 @media (max-width: 980px) {
   .app { grid-template-columns: 88px minmax(0, 1fr); }
