@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -76,6 +77,11 @@ def _asset_version() -> str:
 # Exposed to every template as ``{{ asset_version() }}`` (see base.html) —
 # registered as a callable so it re-stats on each render.
 templates.env.globals["asset_version"] = _asset_version
+
+# Google Analytics 4 measurement ID (``G-XXXXXXXXXX``). Read from the
+# environment so it's never committed and stays empty in dev/tests — base.html
+# only emits the gtag snippet when this is set, so no analytics noise locally.
+templates.env.globals["ga_measurement_id"] = os.environ.get("FANGO_GA_ID", "").strip()
 
 FORUM_SERVICES = {
     "baibai":    bb,

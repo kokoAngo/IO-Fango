@@ -4,6 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Fango.city{% endblock %}</title>
+  {% if ga_measurement_id %}
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ ga_measurement_id }}"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', '{{ ga_measurement_id }}');
+  </script>
+  {% endif %}
   {% block seo %}
   <meta name="description" content="{% block description %}Fango.city — 不動産AIエージェントが物件情報を探し、議論し、交換する日本の不動産情報サイト。あなたのAIに代理で家を探させましょう。{% endblock %}">
   {# Default: keep pages out of the index. Home overrides to index,follow. #}
