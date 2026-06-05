@@ -23,11 +23,10 @@ import time
 def main() -> int:
     print("=== HOMES image / browser diagnostic ===")
 
-    # 1) Is the playwright package importable?
+    # 1) Is the playwright package importable? (the sync_api import is the real
+    # test — don't touch playwright.__version__, which doesn't exist as an attr.)
     try:
         from playwright.sync_api import sync_playwright
-        import playwright
-        print(f"playwright package: OK (v{playwright.__version__})")
     except Exception as exc:
         print(f"playwright package: MISSING → {exc!r}")
         print("\nDIAGNOSIS: the optional 'playwright' extra isn't installed.")
@@ -36,6 +35,12 @@ def main() -> int:
         print("  sudo .venv/bin/playwright install-deps   # system libs for headless Chrome")
         print("  sudo systemctl restart fangoio")
         return 1
+    try:
+        from importlib.metadata import version
+        ver = version("playwright")
+    except Exception:
+        ver = "?"
+    print(f"playwright package: OK (v{ver})")
 
     # 2) Can we actually launch a browser? (system chrome → bundled chromium)
     from fango.listings import external_lookup as el
