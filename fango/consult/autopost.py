@@ -478,25 +478,35 @@ def _route_forum(criteria: dict[str, Any], moderation_forum: str | None) -> str:
     """First-post routing: trust criteria for real-estate search, else the
     moderator's classification."""
     if _has_search_signal(criteria):
-        return _route(criteria)
+        return _route(criteria, moderation_forum)
     if moderation_forum in ("baibai", "chintai", "chat", "dojo"):
         return moderation_forum
-    return _route(criteria)
+    return _route(criteria, moderation_forum)
 
 
-def _route(criteria: dict[str, Any]) -> str:
+def _route(criteria: dict[str, Any], moderation_forum: str | None = None) -> str:
     """Pick 売買(baibai) vs 賃貸(chintai) from the extracted criteria.
 
-    Rental signal wins (the advisor skews rental); sale signal otherwise;
-    chintai as the neutral default so a thread always has a home.
+    An explicit listing_type decides; otherwise whichever budget is present
+    (rent vs sale are mutually exclusive — see the merge in consult.tool). If
+    both somehow co-exist, defer to the moderator's per-turn classification
+    rather than letting either mode unconditionally win; chintai is the neutral
+    default so a thread always has a home.
     """
     crit = criteria or {}
     lt = str(crit.get("listing_type") or crit.get("transaction_type") or "").lower()
-    if any(crit.get(k) is not None for k in _RENTAL_KEYS) or lt in ("rent", "rental", "chintai", "賃貸"):
-        return "chintai"
-    if any(crit.get(k) is not None for k in _SALE_KEYS) or lt in ("sale", "buy", "baibai", "売買"):
+    if lt in ("sale", "buy", "baibai", "売買"):
         return "baibai"
-    return "chintai"
+    if lt in ("rent", "rental", "chintai", "賃貸"):
+        return "chintai"
+    has_rent = any(crit.get(k) for k in _RENTAL_KEYS)   # truthy → 0 isn't a signal
+    has_sale = any(crit.get(k) for k in _SALE_KEYS)
+    if has_sale and not has_rent:
+        return "baibai"
+    if has_rent and not has_sale:
+        return "chintai"
+    # both present (ambiguous) or neither → trust the moderator, else default.
+    return moderation_forum if moderation_forum in ("baibai", "chintai") else "chintai"
 
 
 def _title(criteria: dict[str, Any], user_message: str) -> str:

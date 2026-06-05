@@ -199,8 +199,25 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
         # Merge delta into the running criteria. Drop 0 too — the LLM sometimes
         # fills 0 for unspecified numeric limits, and walk_minutes_max=0 /
         # area_max_sqm=0 would otherwise exclude every listing.
+        delta = {k: v for k, v in intent.criteria_delta.items() if v not in (None, "", 0)}
         merged = dict(sess.last_criteria)
-        merged.update({k: v for k, v in intent.criteria_delta.items() if v not in (None, "", 0)})
+        # Rent vs sale are mutually exclusive. When this turn signals one mode
+        # (a 賃貸/売買 budget, listing_type, or the moderator's forum), clear the
+        # OTHER mode's stale budget so a caller who switched 賃貸→売買 mid-session
+        # doesn't keep a rent ceiling that misroutes the post (sale→賃貸) and
+        # skews the search.
+        _RENT_K = ("rent_min_yen", "rent_max_yen")
+        _SALE_K = ("price_min_man", "price_max_man", "price_man")
+        _dlt = str(delta.get("listing_type") or delta.get("transaction_type") or "").lower()
+        sale_now = any(k in delta for k in _SALE_K) or _dlt in ("sale", "buy", "baibai", "売買") or intent.forum == "baibai"
+        rent_now = any(k in delta for k in _RENT_K) or _dlt in ("rent", "rental", "chintai", "賃貸") or intent.forum == "chintai"
+        if sale_now and not rent_now:
+            for k in _RENT_K:
+                merged.pop(k, None)
+        elif rent_now and not sale_now:
+            for k in _SALE_K:
+                merged.pop(k, None)
+        merged.update(delta)
 
         usage_in = intent.input_tokens
         usage_out = intent.output_tokens

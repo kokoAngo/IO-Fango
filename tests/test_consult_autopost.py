@@ -62,6 +62,24 @@ def test_sale_consult_routes_to_baibai(tmp_db, install_engine):
     assert len(forum_core.get_thread("baibai", sess.log_thread_id)["posts"]) == 2
 
 
+def test_switch_rent_to_sale_reroutes_to_baibai(tmp_db, install_engine):
+    # A caller who first searched 賃貸 then switched to 売買 must not stay pinned to
+    # chintai: the stale rent ceiling is cleared so the post routes to 売買.
+    fake = FakeEngine([
+        FakeIntent(state="ready", criteria_delta={"prefecture": "東京都", "station": "新宿", "rent_max_yen": 200_000}),
+        FakeIntent(state="ready", criteria_delta={"price_max_man": 8000}),
+    ])
+    install_engine(fake)
+    a = _run_turn("新宿で賃貸 20万以下", session_id=None)
+    assert _session(a["session_id"]).log_forum == "chintai"
+
+    b = _run_turn("やっぱり購入で 8000万以下", session_id=a["session_id"])
+    sess = _session(b["session_id"])
+    assert sess.log_forum == "baibai"                         # re-routed to 売買
+    assert sess.last_criteria.get("rent_max_yen") is None     # stale rent budget cleared
+    assert sess.last_criteria.get("price_max_man") == 8000
+
+
 def test_alternating_qa_across_two_turns(tmp_db, install_engine):
     fake = FakeEngine([
         FakeIntent(state="asking", criteria_delta={"prefecture": "東京都"}, ask_back="間取りは?"),
