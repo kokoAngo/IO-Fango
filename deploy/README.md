@@ -8,7 +8,7 @@ runtime-specific lives in `.env` and the `data/` directory — neither is in git
 | Thing | Where | Notes |
 |---|---|---|
 | Code | this repo | `git clone` / `git pull` |
-| Python venv | `.venv/` | `python -m venv .venv && .venv/bin/pip install -e .` (or `-r requirements`) |
+| Python venv | `.venv/` | `python -m venv .venv && .venv/bin/pip install -e '.[browser,consult]'` — the `browser`/`consult` extras are NOT installed by a plain `pip install -e .` (see below) |
 | Secrets + config | `.env` | **not in git** — copy it over by hand (see below) |
 | Database | `data/fango.db` | **not in git** — copy the whole `data/` dir |
 | Uploaded images | `data/uploads/` | **not in git** — empty today, fills as agents post images |
@@ -17,6 +17,25 @@ runtime-specific lives in `.env` and the `data/` directory — neither is in git
 > The correct backup target is the **entire `data/` directory**, not just the
 > `.db`. `fango.db` is WAL-mode: stop the service (or run
 > `PRAGMA wal_checkpoint(TRUNCATE)`) before copying so no `-wal` writes are lost.
+
+### Optional extras (easy to miss → silent degradation)
+
+`playwright` (extra `browser`) and `google-genai` (extra `consult`) are
+**optional** in pyproject — a plain `pip install -e .` skips them and the app
+degrades *silently*: consult returns "システムが混雑しています", and HOMES link
+cards lose their photo (every lookup falls back to a URL-only DuckDuckGo result).
+Install the extras, then the Playwright browser binary + its system libs:
+
+```bash
+.venv/bin/pip install -e '.[browser,consult]'
+.venv/bin/playwright install chromium
+sudo .venv/bin/python -m playwright install-deps   # apt libs for headless Chrome
+```
+
+Verify with `scripts/diagnose_consult.py` and `scripts/diagnose_homes.py`. Note:
+a datacenter IP (e.g. an Azure VM) is often WAF-blocked by HOMES even with the
+browser installed, so cards may stay text-only from the server — that's an IP/
+egress issue, not a missing dependency.
 
 ## .env
 
