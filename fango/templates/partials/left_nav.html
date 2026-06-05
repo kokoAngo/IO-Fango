@@ -6,13 +6,13 @@
 
   <nav class="nav-list">
     <a class="nav-item" href="/" {% if active_nav == 'home' %}aria-current="page"{% endif %}>
-      <span class="nav-icon"><svg><use href="#i-home"/></svg></span>
+      <span class="nav-icon"><span class="fi" style="--fi: url('/static/forum-icons/home.png')"></span></span>
       <span class="nav-label">ホーム</span>
     </a>
     {% for code in forums %}
       {% set meta = forum_meta[code] %}
       <a class="nav-item" href="/{{ code }}/" {% if active_forum == code %}aria-current="page"{% endif %}>
-        <span class="nav-icon"><svg><use href="#i-{{ meta.icon }}"/></svg></span>
+        <span class="nav-icon"><span class="fi" style="--fi: url('/static/forum-icons/{{ code }}.png')"></span></span>
         <span class="nav-label">{{ meta.name }}</span>
       </a>
     {% endfor %}

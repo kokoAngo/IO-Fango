@@ -213,6 +213,14 @@ body[data-forum="wiki"]      {
   flex-shrink: 0;
 }
 .nav-icon svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.75; }
+/* PNG forum icons rendered as a mask painted with currentColor, so they inherit
+   the nav's ink-muted / active-accent colour and theme exactly like the SVGs. */
+.nav-icon .fi {
+  width: 24px; height: 24px;
+  background-color: currentColor;
+  -webkit-mask: var(--fi) center / contain no-repeat;
+  mask: var(--fi) center / contain no-repeat;
+}
 .nav-label { font-weight: 500; }
 .nav-divider { border-top: 1px solid var(--border); margin: var(--space-3) var(--space-4); }
 
