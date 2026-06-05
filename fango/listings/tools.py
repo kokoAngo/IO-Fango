@@ -363,11 +363,19 @@ def register(mcp) -> None:
         listing = svc.get_listing(listing_id)
         if listing is None:
             return None
-        ttype = listing.extra.get("transaction_type") if isinstance(listing.extra, dict) else None
-        floor = listing.extra.get("floor") if isinstance(listing.extra, dict) else None
+        extra = listing.extra if isinstance(listing.extra, dict) else {}
+        ttype = extra.get("transaction_type")
+        floor = extra.get("floor")
         floor = floor if floor is not None else getattr(listing, "floor", None)
+        kind = _kind_of(ttype)
+        rent_yen = extra.get("rent_yen") if extra.get("rent_yen") is not None else getattr(listing, "rent_yen", None)
+        price_man = extra.get("price_man") if extra.get("price_man") is not None else getattr(listing, "price_man", None)
+        rents = external_lookup.rent_tokens(
+            rent_yen=rent_yen if kind == "rent" else None,
+            price_man=price_man if kind == "sale" else None,
+        )
         found = external_lookup.find_listing(
-            listing.building_name, kind=_kind_of(ttype), floor=floor, source_url=listing.url,
+            listing.building_name, kind=kind, floor=floor, rents=rents, source_url=listing.url,
         )
         if not found or not found.get("url"):
             return {"status": "not_found", "listing_id": listing_id,

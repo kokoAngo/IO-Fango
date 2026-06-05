@@ -98,13 +98,17 @@ def resolve_external_link(listing_id: int, building_name: str | None = None,
             return None
 
         row = conn.execute(
-            "SELECT building_name, url, transaction_type, floor FROM listings WHERE id = ?",
+            "SELECT building_name, url, transaction_type, floor, rent_yen, price_man FROM listings WHERE id = ?",
             (listing_id,),
         ).fetchone()
         name = building_name or (row["building_name"] if row else None)
         source_url = row["url"] if row else None
         kind = _kind_of(row["transaction_type"] if row else None)
         floor = row["floor"] if row else None
+        rents = external_lookup.rent_tokens(
+            rent_yen=(row["rent_yen"] if row and kind == "rent" else None),
+            price_man=(row["price_man"] if row and kind == "sale" else None),
+        ) if row else []
         if not name:
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
@@ -112,9 +116,10 @@ def resolve_external_link(listing_id: int, building_name: str | None = None,
 
         # One browser session returns url + og:image + og:title together
         # (HOMES is WAF-walled, so we can't refetch with httpx). We hotlink the
-        # HOMES image rather than self-host it. Sale rows search HOMES 売買; we
-        # prefer the same floor and flag a reference (note) when it isn't ours.
-        found = external_lookup.find_listing(name, kind=kind, floor=floor, source_url=source_url)
+        # HOMES image rather than self-host it. We only link the EXACT unit —
+        # the card must match building + floor + rent/price — else no link.
+        found = external_lookup.find_listing(name, kind=kind, floor=floor, rents=rents,
+                                             source_url=source_url)
         if not found or not found.get("url"):
             _write_cache(conn, listing_id, url=None, source=None, image_url=None,
                          title=None, status="none")
@@ -181,7 +186,7 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
         # Cache pass: attach cached hits now; queue uncached for one batch lookup
         # per kind (rent vs sale use different HOMES searches).
         from collections import defaultdict
-        pending: dict[str, list[tuple[int, str, int | None]]] = defaultdict(list)  # kind → [(id, name, floor)]
+        pending: dict[str, list[tuple]] = defaultdict(list)  # kind → [(id, name, floor, rents)]
         for listing in listings:
             lid = _listing_id_of(listing)
             if not lid:
@@ -195,15 +200,19 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
                         source=cached.get("source"), conn=conn)
                 continue
             row = conn.execute(
-                "SELECT building_name, transaction_type, floor FROM listings WHERE id = ?", (lid,)
+                "SELECT building_name, transaction_type, floor, rent_yen, price_man FROM listings WHERE id = ?", (lid,)
             ).fetchone()
             name = (listing.get("building_name") if isinstance(listing, dict) else None) \
                 or (row["building_name"] if row else None)
             if not name:
                 _write_cache(conn, lid, url=None, source=None, image_url=None, title=None, status="none")
                 continue
-            pending[_kind_of(row["transaction_type"] if row else None)].append(
-                (lid, name, row["floor"] if row else None))
+            k = _kind_of(row["transaction_type"] if row else None)
+            rents = external_lookup.rent_tokens(
+                rent_yen=(row["rent_yen"] if row and k == "rent" else None),
+                price_man=(row["price_man"] if row and k == "sale" else None),
+            ) if row else []
+            pending[k].append((lid, name, row["floor"] if row else None, rents))
 
         if not pending:
             return
@@ -216,8 +225,8 @@ def enrich_post_with_listings(post_id: int, listings, conn=None) -> None:
 
         for kind, items in pending.items():
             results = external_lookup.find_listings(
-                [{"name": n, "floor": fl} for _, n, fl in items], kind=kind)
-            for lid, name, _fl in items:
+                [{"name": n, "floor": fl, "rents": rt} for _, n, fl, rt in items], kind=kind)
+            for lid, name, _fl, _rt in items:
                 found = results.get(name)
                 if found and found.get("url"):
                     _write_cache(conn, lid, url=found["url"], source=found.get("source"),

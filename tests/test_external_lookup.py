@@ -185,26 +185,28 @@ class TestBlockFallback:
         assert seen["kind"] == "sale"   # sale listing routed to HOMES 売買 search
         assert forum_core.list_link_previews(post_id)[0]["url"] == "https://www.homes.co.jp/mansion/b-1/"
 
-    def test_find_listings_falls_back_on_block(self, monkeypatch):
-        # Browser reports the name blocked; DDG recovers the URL.
+    def test_blocked_name_yields_no_link(self, monkeypatch):
+        # No web fallback: a name HOMES blocked/missed gets no link (we never
+        # link a same-building reference we can't verify down to the unit).
         monkeypatch.setattr(external_lookup, "_run_isolated",
                             lambda fn, *a, **k: {"results": {}, "blocked": ["B"]})
-        monkeypatch.setattr(external_lookup, "_ddg_find_homes",
-                            lambda name, kind="rent": {"url": "https://www.homes.co.jp/chintai/room/z/",
-                                          "source": "homes", "image": None, "title": None})
         out = external_lookup.find_listings(["B"])
-        assert out["B"]["url"] == "https://www.homes.co.jp/chintai/room/z/"
-        assert out["B"]["image"] is None
+        assert out["B"] is None
 
-    def test_no_fallback_when_browser_succeeds(self, monkeypatch):
+    def test_browser_success_returns_found(self, monkeypatch):
         found = {"url": "https://www.homes.co.jp/chintai/room/ok/", "source": "homes",
                  "image": "https://image1.homes.jp/a.jpg", "title": "T"}
         monkeypatch.setattr(external_lookup, "_run_isolated",
                             lambda fn, *a, **k: {"results": {"B": found}, "blocked": []})
-        monkeypatch.setattr(external_lookup, "_ddg_find_homes",
-                            lambda *a, **k: pytest.fail("DDG fallback must not run when HOMES succeeded"))
         out = external_lookup.find_listings(["B"])
         assert out["B"] == found
+
+    def test_rent_tokens(self):
+        # Rent → 万 form + plain-yen form; sale → 万 form; empty when no price.
+        assert external_lookup.rent_tokens(rent_yen=135000) == ["13.5万", "135000"]
+        assert external_lookup.rent_tokens(rent_yen=80000) == ["8万", "80000"]
+        assert external_lookup.rent_tokens(price_man=5980) == ["5980万"]
+        assert external_lookup.rent_tokens() == []
 
 
 class TestEnrichBatch:

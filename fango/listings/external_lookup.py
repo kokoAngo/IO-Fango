@@ -63,26 +63,44 @@ _LINK_SEL = {
 # "<n>階"); fall back to the first building match. Returns {href, exact} where
 # exact=true means we matched the same floor. ``sel`` picks rent-room vs
 # sale-building links.
+# Precise unit match: a result card must contain the building name AND our floor
+# (◯階) AND our rent/price (any token in args.rents, e.g. "13.5万" or "135000").
+# All three are required — we only link THIS exact unit, never a same-building
+# reference. Floor/rent use a digit-boundary check so "4階" doesn't hit "14階"
+# and "135000" doesn't hit "1135000".
 _MATCH_JS = """(args) => {
   const norm = s => (s||'').normalize('NFKC').replace(/\\s+/g,'').toLowerCase();
+  const money = s => norm(s).replace(/,/g,'');
+  const isDigit = c => c >= '0' && c <= '9';
+  const hasTok = (hay, tok) => {
+    if (!tok) return false;
+    let i = 0;
+    while ((i = hay.indexOf(tok, i)) !== -1) {
+      const b = hay[i-1], a = hay[i+tok.length];
+      const bOk = (i === 0) || (!isDigit(b) && b !== '.');
+      const aOk = (i+tok.length >= hay.length) || !isDigit(a);
+      if (bOk && aOk) return true;
+      i += 1;
+    }
+    return false;
+  };
   const key = norm(args.name);
-  if (!key) return null;
-  const fl = args.floor ? (String(args.floor) + '階') : null;
+  const floorTok = args.floor ? (String(args.floor) + '階') : null;
+  const rents = (args.rents || []).map(money);
+  if (!key || !floorTok || !rents.length) return null;   // need all three to confirm a unit
   const links = document.querySelectorAll(args.sel);
-  let first = null;
   for (const a of links) {
+    // Climb to the smallest ancestor whose text includes the building name —
+    // that's this card. Stop there, or the text bleeds into neighbouring cards.
     let el = a, txt = '';
     for (let i=0; i<6 && el; i++) { el = el.parentElement; if (el) txt = el.innerText || ''; if (norm(txt).includes(key)) break; }
-    if (!norm(txt).includes(key)) continue;
-    if (first === null) first = a.href;
-    if (fl && txt.includes(fl)) return { href: a.href, exact: true };
+    const n = norm(txt), mm = money(txt);
+    if (n.includes(key) && hasTok(n, floorTok) && rents.some(r => hasTok(mm, r))) {
+      return { href: a.href };
+    }
   }
-  return first ? { href: first, exact: false } : null;
+  return null;
 }"""
-
-# Caveat shown on a HOMES preview when it isn't our exact unit (a different room
-# in the same building, or a sale building page that lists other units).
-_REF_NOTE = "同じ建物の別の住戸（参考。階・価格が異なる場合があります）"
 _OG_JS = """() => {
   const g = p => (document.querySelector(`meta[property="${p}"]`)
                  || document.querySelector(`meta[name="${p}"]`) || {}).content || null;
@@ -153,13 +171,13 @@ def _check_blocked(page) -> None:
 
 
 def _search_one(page, building_name: str, kind: str = "rent",
-                floor: int | None = None) -> dict | None:
+                floor: int | None = None, rents: list[str] | None = None) -> dict | None:
     """One freeword search on an already-open HOMES page for the given ``kind``
     (rent → 賃貸 rooms, sale → 売買 buildings): type the building name, submit,
-    prefer the result on the same ``floor`` as our listing, read its og:image/
-    title. Returns {url, source, image, title, note} (note set when it's NOT our
-    exact unit — a different room / a sale building page) or None.
-    Raises HomesBlocked if HOMES serves a WAF challenge."""
+    and return ONLY the card that matches our exact unit — building name + floor
+    (``◯階``) + rent/price (one of ``rents``). If no card matches all three,
+    return None (no same-building reference). Returns {url, source, image, title,
+    note=None} or None. Raises HomesBlocked if HOMES serves a WAF challenge."""
     page.goto(_ENTRY.get(kind, _ENTRY["rent"]), wait_until="domcontentloaded", timeout=_TIMEOUT)
     _settle(page)
     _check_blocked(page)
@@ -175,7 +193,7 @@ def _search_one(page, building_name: str, kind: str = "rent",
     _check_blocked(page)
     m = page.evaluate(_MATCH_JS, {"name": building_name,
                                   "sel": _LINK_SEL.get(kind, _LINK_SEL["rent"]),
-                                  "floor": floor})
+                                  "floor": floor, "rents": rents or []})
     if not m:
         return None
     href = m["href"]
@@ -187,9 +205,9 @@ def _search_one(page, building_name: str, kind: str = "rent",
         "source": "homes",
         "image": og.get("image"),
         "title": (og.get("title") or "").strip() or None,
-        # Same-floor rental hit → treat as the unit (no caveat); anything else
-        # (different room, or a sale building page) → flag as a reference.
-        "note": None if m.get("exact") else _REF_NOTE,
+        # Only exact-unit matches reach here (name + floor + rent), so never a
+        # reference note.
+        "note": None,
     }
 
 
@@ -219,7 +237,7 @@ def _browser_find_many(targets: list[dict], kind: str = "rent") -> dict:
             page = ctx.new_page()
             for i, t in enumerate(targets):
                 try:
-                    results[t["name"]] = _search_one(page, t["name"], kind, t.get("floor"))
+                    results[t["name"]] = _search_one(page, t["name"], kind, t.get("floor"), t.get("rents"))
                 except HomesBlocked:
                     # WAF kicked in — abandon the browser path for this name and
                     # everything after it; the caller will web-search these.
@@ -319,48 +337,45 @@ def _ddg_parse(html: str, kind: str = "rent") -> list[str]:
     return urls
 
 
-def _ddg_find_homes(building_name: str, kind: str = "rent") -> dict | None:
-    """Web-search fallback: ask DuckDuckGo for the HOMES page of ``building_name``
-    (賃貸 vs 売買 by ``kind``) and return the first matching homes.co.jp link.
-    URL only (no og:image — HOMES is blocking us). Best-effort, never raises."""
-    if not load_settings().external_lookup_fallback:
-        return None
-    name = (building_name or "").strip()
-    if not name:
-        return None
-    try:
-        import httpx
-        q = _DDG_QUERY.get(kind, _DDG_QUERY["rent"]).format(name=name)
-        with httpx.Client(timeout=8.0, follow_redirects=True,
-                          headers={"User-Agent": _UA, "Accept-Language": "ja,en;q=0.8"}) as c:
-            r = c.get(_DDG_HTML, params={"q": q, "kl": "jp-jp"})
-            if r.status_code >= 400:
-                return None
-            urls = _ddg_parse(r.text, kind)
-    except Exception as exc:  # pragma: no cover - network variance
-        log.debug("DDG fallback failed for %r: %s", name, exc)
-        return None
-    if not urls:
-        return None
-    # The web fallback can't tell which floor — always a same-building reference.
-    return {"url": urls[0], "source": "homes", "image": None, "title": None, "note": _REF_NOTE}
+def rent_tokens(*, rent_yen: int | None = None, price_man: int | None = None) -> list[str]:
+    """Strings a HOMES card must contain to confirm THIS unit's price — used by
+    the exact-unit match. For rent: the 万 form ("13.5万") and the plain-yen form
+    ("135000"); for sale: the 万 form ("5980万"). Empty when there's no price to
+    match on, which makes the lookup return no link (we won't link an unverified
+    unit). Pure → unit-testable."""
+    toks: list[str] = []
+    if rent_yen:
+        try:
+            man = int(rent_yen) / 10000
+            toks.append(f"{man:.2f}".rstrip("0").rstrip(".") + "万")
+            toks.append(str(int(rent_yen)))
+        except (TypeError, ValueError):
+            pass
+    if price_man:
+        try:
+            toks.append(f"{int(price_man)}万")
+        except (TypeError, ValueError):
+            pass
+    return toks
 
 
 def find_listing(building_name: str, *, kind: str = "rent", floor: int | None = None,
+                 rents: list[str] | None = None,
                  source_url: str | None = None, **_ignored) -> dict | None:
-    """Find a HOMES listing for ``building_name`` (``kind`` = 'rent' | 'sale'),
-    preferring the same ``floor``. Returns ``{url, source, image, title, note}``
-    or None. Best-effort, never raises.
+    """Find the HOMES page for our EXACT unit of ``building_name`` (``kind`` =
+    'rent' | 'sale') — the card must match building name + ``floor`` + one of
+    ``rents`` (rent/price tokens). No match → None (we never link a same-building
+    reference). Returns ``{url, source, image, title, note}`` or None.
 
     If ``source_url`` is already a HOMES/SUUMO detail page (our own listing's
-    URL), it's returned as-is — that's our exact unit, so no reference note."""
+    URL), it's returned as-is — that's our exact unit."""
     if source_url and source_of_url(source_url):
         return {"url": source_url, "source": source_of_url(source_url),
                 "image": None, "title": None, "note": None}
     name = (building_name or "").strip()
     if not name:
         return None
-    return find_listings([{"name": name, "floor": floor}], kind=kind).get(name)
+    return find_listings([{"name": name, "floor": floor, "rents": rents or []}], kind=kind).get(name)
 
 
 def find_listings(targets, kind: str = "rent") -> dict:
@@ -378,18 +393,17 @@ def find_listings(targets, kind: str = "rent") -> dict:
         if not name or name in seen:
             continue
         seen.add(name)
-        norm.append({"name": name, "floor": t.get("floor")})
+        norm.append({"name": name, "floor": t.get("floor"), "rents": t.get("rents") or []})
     if not norm:
         return {}
     # ~per-building budget + one WAF warm-up.
     timeout = 40.0 + 30.0 * len(norm)
     out = _run_isolated(_browser_find_many, norm, kind, timeout=timeout)
-    if out is None:  # timeout/crash → treat all as blocked, let the fallback try
-        out = {"results": {}, "blocked": [t["name"] for t in norm]}
+    if out is None:  # timeout/crash → no result (we never link an unverified unit)
+        out = {"results": {}}
     results = dict(out.get("results") or {})
-    for name in out.get("blocked") or []:
-        if not results.get(name):
-            results[name] = _ddg_find_homes(name, kind)
+    # No web-search fallback: a same-building page can't confirm THIS unit's floor
+    # + rent, so a name HOMES blocked or missed simply yields no link.
     for t in norm:
         results.setdefault(t["name"], None)
     return results
