@@ -10,7 +10,7 @@ from __future__ import annotations
 _BOT_UA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 
 
-def test_robots_txt_allows_only_home_and_skill(client):
+def test_robots_txt_allows_home_skill_and_api(client):
     r = client.get("/robots.txt")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/plain")
@@ -18,6 +18,9 @@ def test_robots_txt_allows_only_home_and_skill(client):
     assert "Disallow: /" in body
     assert "Allow: /$" in body
     assert "Allow: /static/" in body
+    # The keyless REST path must stay crawlable — some agent fetchers (ChatGPT
+    # Actions / OpenAPI import) honour robots.txt and a blanket Disallow blocks them.
+    assert "Allow: /api/v1/" in body
     assert "Allow: /fangobook/real-estate-search-skill.md" in body
     assert "Sitemap:" in body and "/sitemap.xml" in body
 

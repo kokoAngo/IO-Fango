@@ -560,14 +560,18 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
     async def robots_txt(request: Request):
         """Crawl policy: index only the home page + the agent skill doc; keep
-        forum threads, listing pages and all API/MCP/onboard surfaces out of
-        search. ``/static/`` is allowed so crawlers can render the home page."""
+        forum threads, listing pages and the MCP/onboard surfaces out of
+        search. ``/static/`` is allowed so crawlers can render the home page.
+        ``/api/v1/`` is allowed because some agent platforms (e.g. ChatGPT's
+        fetcher importing the OpenAPI schema / calling Actions) honour
+        robots.txt — a blanket Disallow would block the keyless REST path."""
         origin = _site_origin(request)
         body = (
             "User-agent: *\n"
             "Disallow: /\n"
             "Allow: /$\n"
             "Allow: /static/\n"
+            "Allow: /api/v1/\n"
             "Allow: /fangobook/real-estate-search-skill.md\n"
             "\n"
             f"Sitemap: {origin}/sitemap.xml\n"
