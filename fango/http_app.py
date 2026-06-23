@@ -302,6 +302,102 @@ class McpAcceptHeaderMiddleware:
         await self.app(scope, receive, send)
 
 
+class McpPathNormalizeMiddleware:
+    """Forgive a missing endpoint suffix on the streamable transport URL.
+
+    The streamable transport lives at the exact path ``/mcp2/mcp``. Owners
+    naturally hand out the mount base ``/mcp2`` (or ``/mcp2/``); Starlette
+    answers those with a 307 to ``/mcp2/`` that then 404s — and most MCP
+    clients won't follow a POST redirect (let alone the http downgrade a
+    reverse proxy can introduce on the Location). We rewrite the bare base to
+    the real endpoint so either URL connects. Runs ahead of AgentKeyMiddleware
+    so a ``?agent_key=`` on the bare URL is still picked up after the rewrite.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "") in ("/mcp2", "/mcp2/"):
+            scope = dict(scope)
+            scope["path"] = "/mcp2/mcp"
+            scope["raw_path"] = b"/mcp2/mcp"
+        await self.app(scope, receive, send)
+
+
+class McpCorsMiddleware:
+    """Permissive CORS for the /mcp subtree so browser-based MCP clients connect.
+
+    Browser-hosted clients (ChatGPT's web connector, web playgrounds) send a
+    CORS preflight ``OPTIONS`` before the real POST. The MCP transports answer
+    OPTIONS with 405 and no ``Access-Control-*`` headers, so the browser blocks
+    the request and the connector "won't add". We answer the preflight directly
+    with 204 + the right headers (before any auth/host gate), and stamp the same
+    headers onto every /mcp response — including streamed and error responses.
+
+    Non-/mcp paths are untouched, so SSR pages keep their same-origin behaviour.
+    """
+
+    _ALLOW_METHODS = b"GET, POST, DELETE, OPTIONS"
+    _ALLOW_HEADERS = (
+        b"authorization, content-type, mcp-session-id, mcp-protocol-version, "
+        b"x-agent-key, last-event-id"
+    )
+    _EXPOSE_HEADERS = b"mcp-session-id"
+
+    def __init__(self, app):
+        self.app = app
+
+    @staticmethod
+    def _origin(scope) -> bytes:
+        for k, v in scope.get("headers", ()):
+            if k == b"origin":
+                return v
+        return b""
+
+    def _cors_headers(self, origin: bytes) -> list[tuple[bytes, bytes]]:
+        # Echo the caller's Origin (with Vary) for browser callers; fall back to
+        # ``*`` for origin-less / non-browser callers. No credentials are used
+        # (auth is header-based), so reflecting the origin is safe.
+        return [
+            (b"access-control-allow-origin", origin if origin else b"*"),
+            (b"access-control-allow-methods", self._ALLOW_METHODS),
+            (b"access-control-allow-headers", self._ALLOW_HEADERS),
+            (b"access-control-expose-headers", self._EXPOSE_HEADERS),
+            (b"access-control-max-age", b"86400"),
+            (b"vary", b"Origin"),
+        ]
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope.get("path", "").startswith("/mcp"):
+            await self.app(scope, receive, send)
+            return
+        origin = self._origin(scope)
+        if scope.get("method") == "OPTIONS":
+            # Preflight: answer directly, before host allowlist / auth run.
+            await send({
+                "type": "http.response.start",
+                "status": 204,
+                "headers": self._cors_headers(origin) + [(b"content-length", b"0")],
+            })
+            await send({"type": "http.response.body", "body": b""})
+            return
+        cors = self._cors_headers(origin)
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                # Drop any existing ACAO from inner layers, then append ours.
+                headers = [
+                    (k, v) for (k, v) in message.get("headers", [])
+                    if k.lower() != b"access-control-allow-origin"
+                ]
+                headers.extend(cors)
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+
 _PUBLIC_READ_PREFIXES = ("/listings/", "/baibai/", "/chintai/", "/chat/", "/dojo/", "/wiki/")
 # Substrings that flag obvious non-browser fetchers. We match
 # case-insensitively against the User-Agent header. Anything containing
@@ -495,11 +591,17 @@ def _build_app() -> FastAPI:
             yield
 
     app = FastAPI(title="IO.Fango", lifespan=lifespan)
+    # NB: Starlette runs the LAST-added middleware OUTERMOST. McpCorsMiddleware
+    # is added last so it answers the CORS preflight before the host/auth gates;
+    # McpPathNormalizeMiddleware is added after AgentKeyMiddleware so the bare
+    # ``/mcp2`` URL is rewritten to ``/mcp2/mcp`` before the agent-key lookup.
     app.add_middleware(AgentKeyMiddleware)
+    app.add_middleware(McpPathNormalizeMiddleware)
     app.add_middleware(McpAcceptHeaderMiddleware)
     app.add_middleware(McpHostAllowlistMiddleware)
     app.add_middleware(ScraperGuardMiddleware)
     app.add_middleware(TimingMiddleware)
+    app.add_middleware(McpCorsMiddleware)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     # Two transports mounted side-by-side:
