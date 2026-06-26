@@ -503,6 +503,68 @@ CREATE INDEX IF NOT EXISTS idx_anchors_status    ON agreement_anchors(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_anchors_tx ON agreement_anchors(tx_hash) WHERE tx_hash IS NOT NULL;
 
 -- ============================================================================
+-- Earnest-money escrow (保証金) — economic enforcement on top of anchoring
+-- ----------------------------------------------------------------------------
+-- An escrow stakes an ERC-20 deposit from each party against a finalized
+-- agreement (referenced by content_hash). On clean settle both refund; on
+-- renege the loser's stake is slashed to the winner. FANGO is the arbiter
+-- (owner of DealEscrow). The `escrows` row is canonical intent; tx attempts
+-- append to `escrow_events`. Off by default (no FANGO_CHAIN_ESCROW_ADDR).
+-- Deposit amounts are uint256 base units stored as TEXT (int64 would overflow).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS escrows (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    agreement_id         INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
+    content_hash         TEXT NOT NULL,                 -- copy (stake↔evidence link)
+    token_address        TEXT NOT NULL,
+    token_decimals       INTEGER NOT NULL DEFAULT 18,
+    party_a_agent_id     INTEGER NOT NULL REFERENCES agents(id),
+    party_b_agent_id     INTEGER NOT NULL REFERENCES agents(id),
+    party_a_address      TEXT NOT NULL,
+    party_b_address      TEXT NOT NULL,
+    deposit_a            TEXT NOT NULL,                 -- base-unit integer as STRING
+    deposit_b            TEXT NOT NULL,
+    deadline_ts          INTEGER,                       -- unix secs for refundExpired
+    onchain_escrow_id    INTEGER,                       -- DealEscrow id (NULL until Opened confirms)
+    escrow_contract_addr TEXT,
+    chain_id             INTEGER,
+    status               TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open','funding','funded','settled','slashed','cancelled','expired','failed')),
+    outcome              TEXT,                          -- 'completed'|'slashed:<agent_id>'|'cancelled'|'expired'
+    created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_escrows_agreement ON escrows(agreement_id);
+CREATE INDEX IF NOT EXISTS idx_escrows_status    ON escrows(status);
+-- One live escrow per agreement (a cancelled/expired one can be re-opened).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_escrows_agreement_live
+    ON escrows(agreement_id) WHERE status IN ('open','funding','funded');
+
+CREATE TABLE IF NOT EXISTS escrow_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    escrow_id      INTEGER NOT NULL REFERENCES escrows(id) ON DELETE CASCADE,
+    kind           TEXT NOT NULL
+        CHECK (kind IN ('open','approve_a','deposit_a','approve_b','deposit_b',
+                        'settle','slash','cancel','refund_expired')),
+    party_agent_id INTEGER,
+    amount         TEXT,
+    chain_id       INTEGER,
+    contract_addr  TEXT,
+    tx_hash        TEXT,
+    block_number   INTEGER,
+    status         TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','confirmed','failed','skipped')),
+    error          TEXT,
+    submitted_at   TEXT,
+    confirmed_at   TEXT,
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_escrow_events_escrow ON escrow_events(escrow_id);
+CREATE INDEX IF NOT EXISTS idx_escrow_events_kind   ON escrow_events(escrow_id, kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_escrow_events_tx ON escrow_events(tx_hash) WHERE tx_hash IS NOT NULL;
+
+-- ============================================================================
 -- OAuth 2.1 bridge — lets official directories (Claude Connectors, ChatGPT
 -- Apps) connect via authorization-code + PKCE while reusing the anonymous
 -- ``agents`` identity system. A successful authorize mints a fresh agent

@@ -39,6 +39,20 @@
     {% endif %}
   </dl>
 
+  {% if escrow %}
+  <div class="xp-escrow">
+    <h3>保証金（エスクロー）</h3>
+    <dl class="xp-kv">
+      <dt>状態</dt><dd><span class="xp-badge xp-{{ escrow.status }}">{{ escrow.status }}</span>
+        {% if escrow.outcome %}<span class="muted">· {{ escrow.outcome }}</span>{% endif %}</dd>
+      <dt>当事者A 供託</dt><dd class="mono">{{ escrow.deposit_a_tokens }} token</dd>
+      <dt>当事者B 供託</dt><dd class="mono">{{ escrow.deposit_b_tokens }} token</dd>
+      {% if escrow.onchain_escrow_id is not none %}<dt>Escrow ID</dt><dd class="mono">#{{ escrow.onchain_escrow_id }}</dd>{% endif %}
+    </dl>
+    <p class="muted" style="font-size:12px;margin-top:8px;">双方が保証金を供託し、履行で返還・反故で没収。アンカー（証拠）に経済的な担保を加えます。</p>
+  </div>
+  {% endif %}
+
   {% if show_terms %}
   <div class="xp-terms">
     <h3>条件（鍵保有者のみ表示）</h3>
@@ -77,5 +91,7 @@
   .xp-terms pre { background: var(--bg-input); border: 1px solid var(--border);
     border-radius: 8px; padding: 12px; font-size: 12.5px; overflow-x: auto; }
   .xp-private { margin-top: 16px; font-size: 12.5px; }
+  .xp-escrow { margin-top: 18px; }
+  .xp-escrow h3 { font-size: 15px; margin: 0 0 8px; }
 </style>
 {% endblock %}

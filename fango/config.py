@@ -129,12 +129,14 @@ def load_consult_settings() -> ConsultSettings:
 
 @dataclass(frozen=True)
 class ChainSettings:
-    """EVM anchoring config. Unconfigured (any of rpc/key/contract missing) ⇒
-    anchoring is skipped and agreements stay off-chain. ``private_key`` controls
-    real funds — never log it."""
+    """EVM chain config (anchoring + escrow). Unconfigured ⇒ those features are
+    skipped and stay off-chain. ``private_key`` controls real funds — never log it."""
     rpc_url: str | None
     private_key: str | None
-    contract_addr: str | None
+    contract_addr: str | None       # AgreementRegistry (anchoring)
+    escrow_addr: str | None         # DealEscrow (earnest-money escrow)
+    token_addr: str | None          # default ERC-20 for stakes
+    token_decimals: int
     chain_id: int
     confirmations: int
     confirm_timeout_sec: int
@@ -142,12 +144,18 @@ class ChainSettings:
     def is_configured(self) -> bool:
         return bool(self.rpc_url and self.private_key and self.contract_addr)
 
+    def escrow_is_configured(self) -> bool:
+        return bool(self.rpc_url and self.private_key and self.escrow_addr and self.token_addr)
+
 
 def load_chain_settings() -> ChainSettings:
     return ChainSettings(
         rpc_url=os.environ.get("FANGO_CHAIN_RPC_URL") or None,
         private_key=os.environ.get("FANGO_CHAIN_PRIVATE_KEY") or None,
         contract_addr=os.environ.get("FANGO_CHAIN_CONTRACT_ADDR") or None,
+        escrow_addr=os.environ.get("FANGO_CHAIN_ESCROW_ADDR") or None,
+        token_addr=os.environ.get("FANGO_CHAIN_TOKEN_ADDR") or None,
+        token_decimals=int(os.environ.get("FANGO_CHAIN_TOKEN_DECIMALS", "18")),
         chain_id=int(os.environ.get("FANGO_CHAIN_ID", "11155111")),   # Sepolia default
         confirmations=int(os.environ.get("FANGO_CHAIN_CONFIRMATIONS", "1")),
         confirm_timeout_sec=int(os.environ.get("FANGO_CHAIN_CONFIRM_TIMEOUT_SEC", "180")),

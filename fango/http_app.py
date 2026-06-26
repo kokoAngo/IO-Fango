@@ -935,6 +935,17 @@ def _register_routes(app: FastAPI) -> None:
             anchor = dict(anchor) if anchor else None
         finally:
             conn.close()
+        from .escrow import service as _esvc
+        esc = _esvc.get_escrow_for_agreement(agreement_id)
+        escrow_ctx = None
+        if esc is not None:
+            scale = 10 ** (esc.token_decimals or 18)
+            escrow_ctx = {
+                "id": esc.id, "status": esc.status, "outcome": esc.outcome,
+                "deposit_a_tokens": int(esc.deposit_a) / scale,
+                "deposit_b_tokens": int(esc.deposit_b) / scale,
+                "onchain_escrow_id": esc.onchain_escrow_id,
+            }
         ctx = shared_ctx(request, active_nav="explorer")
         ctx.update({
             "ag": ag,
@@ -942,6 +953,7 @@ def _register_routes(app: FastAPI) -> None:
             "party_b": _auth.pseudonym(ag.party_b_agent_id),
             "verify": verify,
             "anchor": anchor,
+            "escrow": escrow_ctx,
             "show_terms": current_agent_var.get() is not None,
             "terms": json.loads(ag.terms_json),
         })
@@ -981,6 +993,32 @@ def _register_routes(app: FastAPI) -> None:
         if not v.get("found"):
             return JSONResponse({"error": "not found"}, status_code=404)
         return JSONResponse(v)
+
+    @app.get("/escrows/{escrow_id}")
+    async def escrow_view(escrow_id: int):
+        """Public-safe JSON view of an escrow: pseudonymized parties, token,
+        deposits (base units + human-scaled), status, outcome, events. Raw
+        addresses only for keyed callers."""
+        from .escrow import service as _esvc
+        from . import auth as _auth
+        esc = _esvc.get_escrow(escrow_id)
+        if esc is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        scale = 10 ** (esc.token_decimals or 18)
+        out = {
+            "id": esc.id, "agreement_id": esc.agreement_id, "content_hash": esc.content_hash,
+            "party_a": _auth.pseudonym(esc.party_a_agent_id),
+            "party_b": _auth.pseudonym(esc.party_b_agent_id),
+            "token": esc.token_address, "status": esc.status, "outcome": esc.outcome,
+            "deposit_a": esc.deposit_a, "deposit_b": esc.deposit_b,
+            "deposit_a_tokens": int(esc.deposit_a) / scale, "deposit_b_tokens": int(esc.deposit_b) / scale,
+            "onchain_escrow_id": esc.onchain_escrow_id, "chain_id": esc.chain_id,
+            "events": _esvc.list_events(escrow_id),
+        }
+        if current_agent_var.get() is not None:
+            out["party_a_address"] = esc.party_a_address
+            out["party_b_address"] = esc.party_b_address
+        return JSONResponse(out)
 
     @app.get("/onboard/", response_class=HTMLResponse)
     @app.get("/onboard", response_class=HTMLResponse)

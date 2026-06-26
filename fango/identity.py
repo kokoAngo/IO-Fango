@@ -206,6 +206,74 @@ def register_self_identity(agent_id: int, pubkey_hex: str,
 # signing (custodial; foundation for agent-signed agreements)
 # --------------------------------------------------------------------------
 
+def _load_priv(agent_id: int, conn: sqlite3.Connection):
+    """Decrypt a server-custody agent's private key. Returns bytes or None
+    (self-custody / no key / no secret / libs missing)."""
+    fernet = _fernet()
+    if _eth() is None or fernet is None:
+        return None
+    row = conn.execute(
+        "SELECT privkey_enc, key_custody FROM agents WHERE id = ?", (agent_id,)
+    ).fetchone()
+    if not row or row["key_custody"] != "server" or not row["privkey_enc"]:
+        return None
+    return fernet.decrypt(row["privkey_enc"].encode("ascii"))
+
+
+def sign_and_send_tx(agent_id: int, contract_fn, *, w3, chain_id: int,
+                     value: int = 0, conn: sqlite3.Connection | None = None) -> dict:
+    """Sign + broadcast an EVM tx FROM a server-custody agent's address.
+
+    ``contract_fn`` is an already-bound web3 ContractFunction (e.g.
+    ``token.functions.approve(spender, amount)``). Returns an ``anchor()``-shaped
+    ``{status, tx_hash, block_number, error}`` dict; **never raises**. Self-custody
+    or keyless agents return ``{"status":"skipped"}`` — we never hold their key,
+    they must fund externally. ``w3`` is passed in so identity stays chain-agnostic.
+    """
+    bundle = _eth()
+    if bundle is None:
+        return {"status": "skipped", "reason": "identity libs not installed"}
+    Account, _e, _keys = bundle
+    owns = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        priv = _load_priv(agent_id, conn)
+        if priv is None:
+            return {"status": "skipped", "reason": "self-custody or no key (fund externally)"}
+        acct = Account.from_key(priv)
+        nonce = w3.eth.get_transaction_count(acct.address, "pending")
+        base = {"from": acct.address, "nonce": nonce, "chainId": chain_id, "value": value}
+        try:
+            gas = contract_fn.estimate_gas({"from": acct.address, "value": value})
+        except Exception:
+            gas = 200000
+        base["gas"] = int(gas * 1.2)
+        # EIP-1559 where supported, else legacy gasPrice (ganache accepts both).
+        try:
+            base["maxFeePerGas"] = w3.eth.gas_price * 2
+            base["maxPriorityFeePerGas"] = w3.to_wei(1.5, "gwei")
+            tx = contract_fn.build_transaction(base)
+        except Exception:
+            base.pop("maxFeePerGas", None); base.pop("maxPriorityFeePerGas", None)
+            base["gasPrice"] = w3.eth.gas_price
+            tx = contract_fn.build_transaction(base)
+        signed = acct.sign_transaction(tx)
+        raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
+        tx_hash = w3.eth.send_raw_transaction(raw)
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+        ok = receipt["status"] == 1
+        return {"status": "confirmed" if ok else "failed",
+                "tx_hash": tx_hash.hex(), "block_number": receipt["blockNumber"],
+                "from": acct.address, "error": None if ok else "transaction reverted"}
+    except Exception as exc:  # pragma: no cover - network dependent
+        log.warning("custodial tx failed for agent %s: %s", agent_id, exc)
+        return {"status": "failed", "tx_hash": None, "block_number": None, "error": str(exc)}
+    finally:
+        if owns:
+            conn.close()
+
+
 def sign_message(agent_id: int, message: str, conn: sqlite3.Connection | None = None) -> str | None:
     """Sign a UTF-8 message with the agent's custodial key (EIP-191). Returns the
     0x signature, or None if the agent is self-custody / has no key / libs absent.
