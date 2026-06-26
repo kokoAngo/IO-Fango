@@ -32,6 +32,12 @@ browser = [
 chain = [
     "web3>=6.0",
 ]
+# Durable secp256k1 agent identities (fango/identity.py). Optional: identity
+# provisioning is skipped when these are absent. eth-account also ships with web3.
+identity = [
+    "eth-account>=0.10",
+    "cryptography>=41",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

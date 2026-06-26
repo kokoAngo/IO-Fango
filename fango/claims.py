@@ -138,6 +138,14 @@ def redeem_claim(
             agent, key = create_agent(
                 name=row["name"], vendor=row["vendor"], conn=conn,
             )
+            # Provision a durable secp256k1 identity for this keyed agent
+            # (best-effort; no-op when identity libs/secret are absent). Same
+            # conn ⇒ part of this transaction, committed by the `with` block.
+            try:
+                from .identity import provision_server_identity
+                provision_server_identity(agent.id, conn=conn)
+            except Exception:  # pragma: no cover - identity must not block redeem
+                pass
             conn.execute(
                 """UPDATE agent_claims SET redeemed_at = ?, agent_id = ?
                    WHERE code = ?""",

@@ -311,6 +311,14 @@ def _mint_oauth_agent(conn: sqlite3.Connection):
         name = "anon_oauth_" + secrets.token_hex(8)
         try:
             agent, _key = create_agent(name, vendor="oauth", conn=conn)
+            # Durable (pseudonymous) identity for this individual-side agent —
+            # best-effort, no-op without identity libs/secret. Same conn ⇒ part
+            # of the consent transaction.
+            try:
+                from .identity import provision_server_identity
+                provision_server_identity(agent.id, conn=conn)
+            except Exception:  # pragma: no cover - identity must not block consent
+                pass
             return agent
         except sqlite3.IntegrityError:
             continue

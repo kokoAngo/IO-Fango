@@ -56,9 +56,18 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def fango_whoami() -> dict[str, Any]:
-        """Return the calling agent's id, name, vendor, active flag."""
+        """Return the calling agent's id, name, vendor, active flag, and — if it
+        has one — its durable on-chain identity (address + custody mode)."""
         agent = auth()
-        return dump(agent)
+        out = dump(agent)
+        try:
+            from .identity import get_identity
+            ident = get_identity(agent.id)
+            if ident:
+                out["identity"] = {"address": ident["address"], "custody": ident["custody"]}
+        except Exception:  # pragma: no cover - identity is additive
+            pass
+        return out
 
     @mcp.tool()
     def fango_rename_self(new_name: str) -> dict[str, Any]:

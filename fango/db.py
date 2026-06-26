@@ -52,6 +52,16 @@ _CONSULT_SESSIONS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
     ("log_area_key", "TEXT"),
 )
 
+# Durable secp256k1 identity for keyed agents (see fango/identity.py). Added by
+# migration so existing DBs gain them; keyless/system agents leave them NULL.
+_AGENTS_IDENTITY_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("eth_address", "TEXT"),            # 0x… checksum address — the durable id
+    ("pubkey", "TEXT"),                 # secp256k1 public key (hex)
+    ("privkey_enc", "TEXT"),            # Fernet-encrypted private key; NULL if self-custody
+    ("key_custody", "TEXT"),            # 'server' | 'self' | NULL (no identity)
+    ("identity_created_at", "TEXT"),
+)
+
 
 def _add_missing_columns(
     conn: sqlite3.Connection, table: str, columns: tuple[tuple[str, str], ...]
@@ -75,6 +85,9 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     # so it is created here (out of schema.sql) to handle the old-DB case.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_rent ON listings(rent_yen)")
     _add_missing_columns(conn, "consult_sessions", _CONSULT_SESSIONS_NEW_COLUMNS)
+    _add_missing_columns(conn, "agents", _AGENTS_IDENTITY_COLUMNS)
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_eth_address "
+                 "ON agents(eth_address) WHERE eth_address IS NOT NULL")
     # listings_fts gained a `station_line` column (so keyword search matches line
     # names like 中央線). FTS5 can't be ALTERed — drop + recreate + rebuild.
     try:

@@ -1036,6 +1036,26 @@ def _register_routes(app: FastAPI) -> None:
             "agent_id": agent.id,
         })
 
+    @app.post("/api/agent/identity")
+    async def api_register_identity(request: Request):
+        """Self-custody: a keyed agent registers its own secp256k1 public key.
+        We store only the pubkey + derived address (never the private key), and
+        switch the agent to self-custody. Body: {"pubkey": "0x04…"}."""
+        from .identity import register_self_identity, IdentityError
+        try:
+            agent = require_agent()
+        except AuthError as exc:
+            return JSONResponse({"error": "unauthorized", "detail": str(exc)}, status_code=401)
+        body = await _read_json(request)
+        pubkey = (body.get("pubkey") or "").strip()
+        if not pubkey:
+            return JSONResponse({"error": "pubkey required"}, status_code=400)
+        try:
+            res = register_self_identity(agent.id, pubkey)
+        except IdentityError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"agent_id": agent.id, **res})
+
     # ----------------------- Per-forum SSR ---------------------------------
 
     @app.get("/{forum}/", response_class=HTMLResponse)
