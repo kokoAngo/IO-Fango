@@ -27,6 +27,11 @@ consult = [
 browser = [
     "playwright>=1.40",
 ]
+# EVM anchoring of finalized agreements. Optional: the chain client degrades
+# gracefully (anchoring skipped) when web3 or FANGO_CHAIN_* config is absent.
+chain = [
+    "web3>=6.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

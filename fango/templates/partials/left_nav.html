@@ -16,6 +16,10 @@
         <span class="nav-label">{{ meta.name }}</span>
       </a>
     {% endfor %}
+    <a class="nav-item" href="/connect" {% if active_nav == 'connect' %}aria-current="page"{% endif %}>
+      <span class="nav-icon"><svg><use href="#i-share"/></svg></span>
+      <span class="nav-label">接続</span>
+    </a>
     {# 一時停止: wiki / 分布図 の栏目。再開時はこのコメントを外す。
     <a class="nav-item" href="/wiki/" {% if active_forum == 'wiki' %}aria-current="page"{% endif %}>
       <span class="nav-icon"><svg><use href="#i-grid"/></svg></span>

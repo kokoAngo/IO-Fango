@@ -439,3 +439,113 @@ CREATE TABLE IF NOT EXISTS agent_activity (
     created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_activity_ts ON agent_activity(created_at DESC);
+
+-- ============================================================================
+-- Finalized agreements + blockchain anchoring
+-- ----------------------------------------------------------------------------
+-- A finalized agent↔agent deal is recorded here as an immutable canonical
+-- record; only a SHA-256 hash of that record (+ minimal non-PII metadata) is
+-- anchored on chain, so a party can't later renege on agreed terms. The
+-- ``agreements`` row never mutates after insert (its content_hash must stay
+-- trustworthy); anchor attempts append to the ``agreement_anchors`` side-table.
+-- Off by default — without FANGO_CHAIN_* config, agreements are still created
+-- off-chain and anchoring is skipped. See fango/agreements/ + fango/chain/.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS agreements (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    agreement_type    TEXT NOT NULL,                 -- 'rental' | 'sale'
+    listing_id        INTEGER REFERENCES listings(id),
+    listing_reins_id  TEXT,
+    party_a_agent_id  INTEGER NOT NULL REFERENCES agents(id),
+    party_b_agent_id  INTEGER NOT NULL REFERENCES agents(id),
+    price_yen         INTEGER,                        -- denormalized for query/index
+    terms_json        TEXT NOT NULL,                  -- JSON of the `terms` sub-object
+    canonical_json    TEXT NOT NULL,                  -- EXACT string that was hashed
+    content_hash      TEXT NOT NULL UNIQUE,           -- '0x'+sha256 hex; UNIQUE = idempotency
+    schema_version    TEXT NOT NULL DEFAULT '1',
+    source            TEXT NOT NULL DEFAULT 'service', -- 'service'|'cli'|'negotiation'
+    status            TEXT NOT NULL DEFAULT 'unanchored'
+        CHECK (status IN ('unanchored','pending','anchored','failed')),
+    finalized_at      TEXT NOT NULL,                  -- timestamp inside the canonical record
+    -- Reserved for a future per-agent-signature upgrade (server is sole witness now).
+    party_a_signature TEXT,
+    party_a_pubkey    TEXT,
+    party_b_signature TEXT,
+    party_b_pubkey    TEXT,
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_agreements_status  ON agreements(status);
+CREATE INDEX IF NOT EXISTS idx_agreements_listing ON agreements(listing_id);
+CREATE INDEX IF NOT EXISTS idx_agreements_parties ON agreements(party_a_agent_id, party_b_agent_id);
+
+-- On-chain anchor attempts (tx lifecycle). One agreement may accrue several
+-- rows (a failed submit + a retry that confirmed); the latest 'confirmed' row
+-- is the live anchor.
+CREATE TABLE IF NOT EXISTS agreement_anchors (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    agreement_id  INTEGER NOT NULL REFERENCES agreements(id) ON DELETE CASCADE,
+    content_hash  TEXT NOT NULL,                  -- copy, for cross-check
+    chain_id      INTEGER,
+    contract_addr TEXT,
+    tx_hash       TEXT,
+    block_number  INTEGER,
+    confirmations INTEGER NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','confirmed','failed')),
+    error         TEXT,
+    submitted_at  TEXT,
+    confirmed_at  TEXT,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_anchors_agreement ON agreement_anchors(agreement_id);
+CREATE INDEX IF NOT EXISTS idx_anchors_status    ON agreement_anchors(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_anchors_tx ON agreement_anchors(tx_hash) WHERE tx_hash IS NOT NULL;
+
+-- ============================================================================
+-- OAuth 2.1 bridge — lets official directories (Claude Connectors, ChatGPT
+-- Apps) connect via authorization-code + PKCE while reusing the anonymous
+-- ``agents`` identity system. A successful authorize mints a fresh agent
+-- (vendor='oauth'); the access token is an opaque string resolved to that
+-- agent_id (see fango/oauth.py + auth.lookup_by_access_token). OAuth is opt-in:
+-- keyless consult/browse/post are unaffected. See docs/oauth-bridge-design.md.
+-- ============================================================================
+
+-- Dynamically-registered OAuth clients (RFC 7591). Public clients (PKCE, no
+-- secret) only for Phase 1 — client_secret_hash stays NULL.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id          TEXT PRIMARY KEY,
+    client_secret_hash TEXT,                       -- NULL = public client + PKCE
+    client_name        TEXT,
+    redirect_uris      TEXT NOT NULL,              -- JSON array; exact-match allowlist
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- Single-use authorization codes (~60s TTL), bound to client + redirect_uri +
+-- PKCE challenge and to the freshly-minted agent.
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+    code_hash      TEXT PRIMARY KEY,
+    client_id      TEXT NOT NULL,
+    agent_id       INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    redirect_uri   TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,                  -- PKCE S256
+    scope          TEXT,
+    expires_at     TEXT NOT NULL,
+    used           INTEGER NOT NULL DEFAULT 0,
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- Issued tokens. access_token is opaque; both stored SHA-256-hashed. Revoke by
+-- row (revoked=1) or transitively via agents.active=0.
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    access_token_hash  TEXT PRIMARY KEY,
+    refresh_token_hash TEXT UNIQUE,
+    client_id          TEXT NOT NULL,
+    agent_id           INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    scope              TEXT,
+    expires_at         TEXT NOT NULL,              -- access-token expiry
+    revoked            INTEGER NOT NULL DEFAULT 0,
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_agent ON oauth_tokens(agent_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh ON oauth_tokens(refresh_token_hash);

@@ -121,3 +121,30 @@ def load_consult_settings() -> ConsultSettings:
         session_ttl_seconds=int(os.environ.get("FANGO_CONSULT_SESSION_TTL_SEC", "86400")),
         history_compress_after=int(os.environ.get("FANGO_CONSULT_HISTORY_COMPRESS_AFTER", "3")),
     )
+
+
+@dataclass(frozen=True)
+class ChainSettings:
+    """EVM anchoring config. Unconfigured (any of rpc/key/contract missing) ⇒
+    anchoring is skipped and agreements stay off-chain. ``private_key`` controls
+    real funds — never log it."""
+    rpc_url: str | None
+    private_key: str | None
+    contract_addr: str | None
+    chain_id: int
+    confirmations: int
+    confirm_timeout_sec: int
+
+    def is_configured(self) -> bool:
+        return bool(self.rpc_url and self.private_key and self.contract_addr)
+
+
+def load_chain_settings() -> ChainSettings:
+    return ChainSettings(
+        rpc_url=os.environ.get("FANGO_CHAIN_RPC_URL") or None,
+        private_key=os.environ.get("FANGO_CHAIN_PRIVATE_KEY") or None,
+        contract_addr=os.environ.get("FANGO_CHAIN_CONTRACT_ADDR") or None,
+        chain_id=int(os.environ.get("FANGO_CHAIN_ID", "11155111")),   # Sepolia default
+        confirmations=int(os.environ.get("FANGO_CHAIN_CONFIRMATIONS", "1")),
+        confirm_timeout_sec=int(os.environ.get("FANGO_CHAIN_CONFIRM_TIMEOUT_SEC", "180")),
+    )

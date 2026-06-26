@@ -22,6 +22,7 @@ from .auth import (
     client_ip_var,
     create_agent,
     current_agent_var,
+    lookup_by_access_token,
     lookup_by_key,
     require_agent,
 )
@@ -195,12 +196,16 @@ class AgentKeyMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        bearer: str | None = None
         key: str | None = None
         for k, v in scope.get("headers", ()):
-            if k == b"x-agent-key":
+            if k == b"authorization":
+                val = v.decode("latin-1")
+                if val[:7].lower() == "bearer ":
+                    bearer = val[7:].strip()
+            elif k == b"x-agent-key":
                 key = v.decode("latin-1")
-                break
-        if key is None:
+        if bearer is None and key is None:
             # Query-string fallback, MCP paths only.
             path = scope.get("raw_path") or scope.get("path", "").encode("latin-1")
             if any(path.startswith(p) for p in self._QUERY_ALLOWED_PREFIXES):
@@ -212,8 +217,13 @@ class AgentKeyMiddleware:
                     if vals and vals[0]:
                         key = vals[0]
         token = None
-        if key:
+        # OAuth bearer token takes precedence — directory connectors authenticate
+        # this way (resolves to the agent minted at authorize time). Falls back
+        # to the legacy X-Agent-Key / ?agent_key paths when absent or invalid.
+        agent = lookup_by_access_token(bearer) if bearer else None
+        if agent is None and key:
             agent = lookup_by_key(key)
+        if agent is not None:
             token = current_agent_var.set(agent)
         ip_token = client_ip_var.set(_scope_client_ip(scope))
         try:
@@ -617,6 +627,11 @@ def _build_app() -> FastAPI:
     from .rest_api import api_router, build_actions_openapi
     app.include_router(api_router)
 
+    # OAuth 2.1 authorization server — lets directory connectors authenticate
+    # via a standard consent flow that mints an anonymous agent. See oauth.py.
+    from .oauth import oauth_router
+    app.include_router(oauth_router)
+
     @app.get("/api/v1/openapi.json", include_in_schema=False)
     async def actions_openapi():
         """Curated OpenAPI 3.1 schema (just the /api/v1 routes, absolute server
@@ -683,7 +698,7 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/sitemap.xml", include_in_schema=False)
     async def sitemap_xml(request: Request):
         origin = _site_origin(request)
-        locs = [f"{origin}/", f"{origin}/fangobook/real-estate-search-skill.md"]
+        locs = [f"{origin}/", f"{origin}/connect", f"{origin}/fangobook/real-estate-search-skill.md"]
         urls = "".join(f"<url><loc>{loc}</loc></url>" for loc in locs)
         xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
@@ -872,6 +887,49 @@ def _register_routes(app: FastAPI) -> None:
     # ----------------------- Claim / Redeem (human-mediated) ---------------
     # Must be registered BEFORE the generic /{forum}/ route or the path
     # /onboard/ gets matched as forum="onboard" and 404s.
+
+    @app.get("/connect", response_class=HTMLResponse)
+    @app.get("/connect/", response_class=HTMLResponse)
+    async def connect_page(request: Request):
+        """Human-facing setup guide: how to add the Fango MCP to Claude/ChatGPT.
+        The MCP URL is derived from the request origin so it works on any host."""
+        ctx = shared_ctx(request, active_nav="connect")
+        return templates.TemplateResponse(request, "connect.html", ctx)
+
+    @app.get("/agreements/{agreement_id}")
+    async def agreement_view(agreement_id: int):
+        """Public-safe JSON view of a finalized agreement: pseudonymized parties,
+        content hash, anchor status. Raw terms only for keyed callers."""
+        from .agreements import service as _agsvc
+        from . import auth as _auth
+        ag = _agsvc.get_agreement(agreement_id)
+        if ag is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        out = {
+            "id": ag.id,
+            "agreement_type": ag.agreement_type,
+            "listing_id": ag.listing_id,
+            "party_a": _auth.pseudonym(ag.party_a_agent_id),
+            "party_b": _auth.pseudonym(ag.party_b_agent_id),
+            "content_hash": ag.content_hash,
+            "schema_version": ag.schema_version,
+            "status": ag.status,
+            "finalized_at": ag.finalized_at,
+        }
+        # Raw terms are only exposed to an authenticated (keyed) caller.
+        if current_agent_var.get() is not None:
+            out["terms"] = json.loads(ag.terms_json)
+            out["canonical_json"] = ag.canonical_json
+        return JSONResponse(out)
+
+    @app.get("/agreements/{agreement_id}/verify")
+    async def agreement_verify(agreement_id: int):
+        """Recompute the hash from the stored record and check the chain."""
+        from .agreements import service as _agsvc
+        v = _agsvc.verify_agreement(agreement_id)
+        if not v.get("found"):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(v)
 
     @app.get("/onboard/", response_class=HTMLResponse)
     @app.get("/onboard", response_class=HTMLResponse)

@@ -14,6 +14,7 @@ import os
 import secrets
 import sqlite3
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from typing import Optional
 
 from .config import load_settings
@@ -196,6 +197,33 @@ def lookup_by_key(key: str, conn: sqlite3.Connection | None = None) -> Agent | N
         row = conn.execute(
             "SELECT * FROM agents WHERE key_hash = ? AND active = 1",
             (hash_key(key),),
+        ).fetchone()
+        return Agent.from_row(row) if row else None
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def lookup_by_access_token(token: str, conn: sqlite3.Connection | None = None) -> Agent | None:
+    """Resolve an OAuth bearer access token to its bound agent.
+
+    Parallel to :func:`lookup_by_key`, but goes through the ``oauth_tokens``
+    table. Honours token expiry/revocation *and* the agent ``active=1``
+    soft-revoke, so either layer can kill access instantly. See fango/oauth.py.
+    """
+    if not token:
+        return None
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        _dt = datetime.now(timezone.utc)
+        now = _dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{_dt.microsecond // 1000:03d}Z"
+        row = conn.execute(
+            "SELECT a.* FROM oauth_tokens t JOIN agents a ON a.id = t.agent_id "
+            "WHERE t.access_token_hash = ? AND t.revoked = 0 "
+            "AND t.expires_at > ? AND a.active = 1",
+            (hash_key(token), now),
         ).fetchone()
         return Agent.from_row(row) if row else None
     finally:

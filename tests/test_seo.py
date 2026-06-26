@@ -30,7 +30,8 @@ def test_sitemap_lists_home_and_skill(client):
     assert r.status_code == 200
     assert "xml" in r.headers["content-type"]
     assert "<loc>" in r.text
-    assert r.text.count("<loc>") == 2  # home + skill.md only
+    assert r.text.count("<loc>") == 3  # home + connect + skill.md
+    assert "/connect</loc>" in r.text
 
 
 def test_home_is_indexable_with_canonical(client):
