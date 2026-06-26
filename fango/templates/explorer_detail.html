@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}合意 #{{ ag.id }} ── 台帳エクスプローラー{% endblock %}
+{% block content %}
+
+<div class="xp-wrap">
+  <a class="xp-back" href="/explorer">← 台帳一覧へ</a>
+
+  <div class="xp-d-head">
+    <h1>合意 <span class="mono">#{{ ag.id }}</span></h1>
+    <span class="xp-badge xp-{{ ag.status }}">{{ ag.status }}</span>
+    <span class="muted">{{ "賃貸" if ag.agreement_type == "rental" else "売買" }}</span>
+  </div>
+
+  <!-- Integrity / verification -->
+  <div class="xp-verify {{ 'ok' if verify.record_ok else 'bad' }}">
+    {% if verify.record_ok %}
+      <strong>✓ レコード整合性 OK</strong> — 保存された原本から再計算したハッシュが一致します（未改竄）。
+    {% else %}
+      <strong>✗ 改竄を検出</strong> — 保存された原本のハッシュが記録と一致しません。
+    {% endif %}
+    <div class="xp-onchain-line">
+      チェーン記録:
+      {% if verify.on_chain %}<span class="xp-badge xp-anchored">on-chain</span>{% else %}<span class="xp-badge xp-unanchored">未記録</span>{% endif %}
+    </div>
+  </div>
+
+  <!-- On-chain-equivalent fields -->
+  <dl class="xp-kv">
+    <dt>コンテンツハッシュ</dt><dd class="mono break">{{ ag.content_hash }}</dd>
+    <dt>当事者 A</dt><dd class="mono">{{ party_a }} <span class="muted">(agent #{{ ag.party_a_agent_id }})</span></dd>
+    <dt>当事者 B</dt><dd class="mono">{{ party_b }} <span class="muted">(agent #{{ ag.party_b_agent_id }})</span></dd>
+    <dt>物件</dt><dd>{% if ag.listing_id %}<a href="/listings/{{ ag.listing_id }}">listing #{{ ag.listing_id }}</a>{% else %}—{% endif %}</dd>
+    <dt>成立時刻</dt><dd class="mono">{{ ag.finalized_at }}</dd>
+    {% if anchor %}
+    <dt>TX ハッシュ</dt><dd class="mono break">{{ anchor.tx_hash or "—" }}</dd>
+    <dt>ブロック</dt><dd class="mono">{{ anchor.block_number if anchor.block_number is not none else "—" }}</dd>
+    <dt>チェーンID</dt><dd class="mono">{{ anchor.chain_id if anchor.chain_id is not none else "—" }}</dd>
+    {% if anchor.error %}<dt>エラー</dt><dd class="xp-err">{{ anchor.error }}</dd>{% endif %}
+    {% endif %}
+  </dl>
+
+  {% if show_terms %}
+  <div class="xp-terms">
+    <h3>条件（鍵保有者のみ表示）</h3>
+    <pre class="mono">{{ terms | tojson(indent=2) }}</pre>
+  </div>
+  {% else %}
+  <p class="xp-private muted">条件の原文はチェーンに載せていません（ハッシュのみ）。原本は当事者のみが照合できます。</p>
+  {% endif %}
+</div>
+
+<style>
+  .xp-wrap { max-width: 640px; margin: 0 auto; padding: var(--space-4); }
+  .xp-back { display: inline-block; margin-bottom: 14px; color: var(--accent); text-decoration: none; font-size: 13px; }
+  .xp-d-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+  .xp-d-head h1 { margin: 0; font-size: 22px; }
+  .mono { font-family: "JetBrains Mono", monospace; }
+  .break { word-break: break-all; }
+  .xp-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .xp-anchored { background: rgba(40,167,69,.16); color: #4caf6a; }
+  .xp-pending { background: rgba(204,140,0,.16); color: #d39a2a; }
+  .xp-failed { background: rgba(204,40,40,.16); color: #e06a6a; }
+  .xp-unanchored { background: var(--bg-muted); color: var(--ink-faint); }
+  .xp-verify { border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px;
+    margin-bottom: 18px; font-size: 13px; line-height: 1.6; background: var(--bg-elevated); }
+  .xp-verify.ok { border-color: rgba(40,167,69,.4); }
+  .xp-verify.bad { border-color: rgba(204,40,40,.5); }
+  .xp-onchain-line { margin-top: 8px; }
+  .xp-kv { display: grid; grid-template-columns: 130px 1fr; gap: 0; margin: 0;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .xp-kv dt { padding: 11px 14px; background: var(--bg-muted); color: var(--ink-muted);
+    font-size: 12px; border-bottom: 1px solid var(--border); }
+  .xp-kv dd { padding: 11px 14px; margin: 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .xp-kv dt:last-of-type, .xp-kv dd:last-of-type { border-bottom: 0; }
+  .xp-err { color: #e06a6a; }
+  .xp-terms { margin-top: 18px; }
+  .xp-terms pre { background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; font-size: 12.5px; overflow-x: auto; }
+  .xp-private { margin-top: 16px; font-size: 12.5px; }
+</style>
+{% endblock %}

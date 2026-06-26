@@ -896,6 +896,57 @@ def _register_routes(app: FastAPI) -> None:
         ctx = shared_ctx(request, active_nav="connect")
         return templates.TemplateResponse(request, "connect.html", ctx)
 
+    @app.get("/explorer", response_class=HTMLResponse)
+    @app.get("/explorer/", response_class=HTMLResponse)
+    async def explorer_index(request: Request, q: str = ""):
+        """Block-explorer-style list of anchored agreements, with search. Shows
+        only on-chain-equivalent data (hash + metadata); terms stay private."""
+        from .agreements import service as _agsvc
+        from . import auth as _auth
+        if q.strip():
+            hit = _agsvc.find_agreement_id(q)
+            if hit is not None:
+                return RedirectResponse(f"/explorer/{hit}", status_code=303)
+        rows = _agsvc.list_recent_agreements(limit=50)
+        for r in rows:
+            r["party_a"] = _auth.pseudonym(r["party_a_agent_id"])
+            r["party_b"] = _auth.pseudonym(r["party_b_agent_id"])
+        ctx = shared_ctx(request, active_nav="explorer")
+        ctx.update({"rows": rows, "stats": _agsvc.count_agreements(),
+                    "query": q, "no_match": bool(q.strip())})
+        return templates.TemplateResponse(request, "explorer_index.html", ctx)
+
+    @app.get("/explorer/{agreement_id}", response_class=HTMLResponse)
+    async def explorer_detail(request: Request, agreement_id: int):
+        """Detail view for one anchored agreement: record metadata + on-chain
+        verification (recomputed hash + chain check)."""
+        from .agreements import service as _agsvc
+        from . import auth as _auth
+        ag = _agsvc.get_agreement(agreement_id)
+        if ag is None:
+            ctx = shared_ctx(request, active_nav="explorer")
+            ctx.update({"rows": [], "stats": _agsvc.count_agreements(),
+                        "query": str(agreement_id), "no_match": True})
+            return templates.TemplateResponse(request, "explorer_index.html", ctx, status_code=404)
+        verify = _agsvc.verify_agreement(agreement_id)
+        conn = connect()
+        try:
+            anchor = _agsvc.latest_anchor(agreement_id, conn)
+            anchor = dict(anchor) if anchor else None
+        finally:
+            conn.close()
+        ctx = shared_ctx(request, active_nav="explorer")
+        ctx.update({
+            "ag": ag,
+            "party_a": _auth.pseudonym(ag.party_a_agent_id),
+            "party_b": _auth.pseudonym(ag.party_b_agent_id),
+            "verify": verify,
+            "anchor": anchor,
+            "show_terms": current_agent_var.get() is not None,
+            "terms": json.loads(ag.terms_json),
+        })
+        return templates.TemplateResponse(request, "explorer_detail.html", ctx)
+
     @app.get("/agreements/{agreement_id}")
     async def agreement_view(agreement_id: int):
         """Public-safe JSON view of a finalized agreement: pseudonymized parties,

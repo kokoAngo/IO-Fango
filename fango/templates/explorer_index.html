@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}台帳エクスプローラー ── Fango.city{% endblock %}
+{% block description %}Fango で成立した合意のハッシュをブロックチェーンに記録した台帳。最新の記録の一覧と、ハッシュ／TX／IDでの検索。{% endblock %}
+{% block content %}
+
+<div class="xp-wrap">
+  <div class="xp-head">
+    <h1>台帳エクスプローラー</h1>
+    <p class="muted">成立した合意は、原文ではなく <strong>SHA-256 ハッシュ</strong>だけをチェーンに記録します。
+      ここでは記録済みの一覧と、その照合ができます（条件の原文は非公開）。</p>
+    <div class="xp-stats">
+      <div class="xp-stat"><span class="xp-num">{{ stats.total }}</span><span class="xp-lbl">合意レコード</span></div>
+      <div class="xp-stat"><span class="xp-num">{{ stats.anchored }}</span><span class="xp-lbl">チェーン記録済み</span></div>
+    </div>
+  </div>
+
+  <form class="xp-search" method="get" action="/explorer">
+    <input type="text" name="q" value="{{ query|e }}" autocomplete="off"
+           placeholder="ハッシュ / TX ハッシュ / 合意ID で検索">
+    <button type="submit">検索</button>
+  </form>
+  {% if no_match %}
+  <p class="xp-nomatch">「{{ query|e }}」に一致する記録は見つかりませんでした。</p>
+  {% endif %}
+
+  <table class="xp-table">
+    <thead>
+      <tr><th>ID</th><th>ハッシュ</th><th>種別</th><th>当事者</th><th>状態</th><th>ブロック</th><th>TX</th><th>時刻</th></tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td><a class="xp-id" href="/explorer/{{ r.id }}">#{{ r.id }}</a></td>
+        <td class="mono"><a href="/explorer/{{ r.id }}">{{ r.content_hash[:10] }}…{{ r.content_hash[-6:] }}</a></td>
+        <td>{{ "賃貸" if r.agreement_type == "rental" else "売買" }}</td>
+        <td class="mono xp-parties">{{ r.party_a }} ⇄ {{ r.party_b }}</td>
+        <td><span class="xp-badge xp-{{ r.status }}">{{ r.status }}</span></td>
+        <td class="mono">{{ r.block_number if r.block_number is not none else "—" }}</td>
+        <td class="mono">{% if r.tx_hash %}{{ r.tx_hash[:8] }}…{% else %}—{% endif %}</td>
+        <td class="muted">{{ r.created_at | humanize }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="xp-empty">まだ記録はありません。合意が成立すると、ここに並びます。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .xp-wrap { max-width: 760px; margin: 0 auto; padding: var(--space-4); }
+  .xp-head h1 { margin: 0 0 6px; }
+  .xp-head p { font-size: 13px; line-height: 1.6; margin: 0 0 14px; }
+  .xp-stats { display: flex; gap: 12px; margin-bottom: 18px; }
+  .xp-stat { background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 18px; }
+  .xp-num { display: block; font-size: 22px; font-weight: 700; }
+  .xp-lbl { font-size: 12px; color: var(--ink-muted); }
+  .xp-search { display: flex; gap: 8px; margin-bottom: 8px; }
+  .xp-search input { flex: 1; padding: 11px 13px; border: 1px solid var(--border-strong);
+    border-radius: 9px; background: var(--bg-input); color: var(--ink);
+    font-family: "JetBrains Mono", monospace; font-size: 13px; }
+  .xp-search button { border: 0; border-radius: 9px; padding: 0 20px; font-weight: 600;
+    background: var(--accent); color: var(--ink-on-accent); cursor: pointer; }
+  .xp-nomatch { font-size: 13px; color: var(--accent); margin: 6px 0 14px; }
+  .xp-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+  .xp-table th { text-align: left; color: var(--ink-muted); font-weight: 600;
+    font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--border-strong); }
+  .xp-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); }
+  .xp-table a { color: var(--accent); text-decoration: none; }
+  .xp-table a:hover { text-decoration: underline; }
+  .mono { font-family: "JetBrains Mono", monospace; }
+  .xp-parties { font-size: 12px; color: var(--ink-muted); }
+  .xp-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .xp-anchored { background: rgba(40,167,69,.16); color: #4caf6a; }
+  .xp-pending { background: rgba(204,140,0,.16); color: #d39a2a; }
+  .xp-failed { background: rgba(204,40,40,.16); color: #e06a6a; }
+  .xp-unanchored { background: var(--bg-muted); color: var(--ink-faint); }
+  .xp-empty, .xp-table td.xp-empty { text-align: center; color: var(--ink-faint); padding: 28px; }
+</style>
+{% endblock %}

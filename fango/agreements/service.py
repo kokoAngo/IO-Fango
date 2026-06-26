@@ -252,6 +252,81 @@ def latest_anchor(agreement_id: int, conn: sqlite3.Connection) -> sqlite3.Row | 
     ).fetchone()
 
 
+def list_recent_agreements(limit: int = 50, conn: sqlite3.Connection | None = None) -> list[dict[str, Any]]:
+    """Recent agreements with their latest confirmed anchor (tx/block/chain),
+    newest first — the explorer's list view. Terms are NOT included (private)."""
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT a.id, a.agreement_type, a.status, a.content_hash, a.listing_id,"
+            " a.party_a_agent_id, a.party_b_agent_id, a.finalized_at, a.created_at,"
+            " (SELECT tx_hash FROM agreement_anchors x WHERE x.agreement_id=a.id"
+            "    AND x.status='confirmed' ORDER BY x.id DESC LIMIT 1) AS tx_hash,"
+            " (SELECT block_number FROM agreement_anchors x WHERE x.agreement_id=a.id"
+            "    AND x.status='confirmed' ORDER BY x.id DESC LIMIT 1) AS block_number,"
+            " (SELECT chain_id FROM agreement_anchors x WHERE x.agreement_id=a.id"
+            "    AND x.status='confirmed' ORDER BY x.id DESC LIMIT 1) AS chain_id"
+            " FROM agreements a ORDER BY a.id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def count_agreements(conn: sqlite3.Connection | None = None) -> dict[str, int]:
+    """Totals for the explorer header: total + anchored."""
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM agreements").fetchone()[0]
+        anchored = conn.execute("SELECT COUNT(*) FROM agreements WHERE status='anchored'").fetchone()[0]
+        return {"total": total, "anchored": anchored}
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def find_agreement_id(query: str, conn: sqlite3.Connection | None = None) -> int | None:
+    """Resolve a free-text explorer search to an agreement id. Accepts a numeric
+    id, a content hash (0x… 64-hex), or a tx hash."""
+    q = (query or "").strip()
+    if not q:
+        return None
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        if q.isdigit():
+            row = conn.execute("SELECT id FROM agreements WHERE id = ?", (int(q),)).fetchone()
+            if row:
+                return row["id"]
+        ql = q.lower()
+        h = ql if ql.startswith("0x") else "0x" + ql
+        # content hash (66 chars incl 0x)
+        if len(h) == 66:
+            row = conn.execute("SELECT id FROM agreements WHERE lower(content_hash) = ?", (h,)).fetchone()
+            if row:
+                return row["id"]
+        # tx hash — stored with or without 0x; match both
+        bare = ql[2:] if ql.startswith("0x") else ql
+        row = conn.execute(
+            "SELECT agreement_id FROM agreement_anchors"
+            " WHERE lower(tx_hash) = ? OR lower(tx_hash) = ? ORDER BY id DESC LIMIT 1",
+            (bare, "0x" + bare),
+        ).fetchone()
+        if row:
+            return row["agreement_id"]
+        return None
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def verify_agreement(agreement_id: int, conn: sqlite3.Connection | None = None) -> dict[str, Any]:
     """Recompute the hash from the stored canonical_json (tamper check), then
     check the chain. Returns {found, record_ok, on_chain, content_hash, tx_hash,
