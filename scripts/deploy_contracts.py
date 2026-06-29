@@ -26,7 +26,30 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 _CONTRACTS = REPO_ROOT / "fango" / "chain" / "contracts"
-_SOLC_VERSION = "0.8.20"
+_SOLC_VERSION = "0.8.20"   # minimum (pragma ^0.8.20); a newer system solc is fine
+
+
+def _ensure_solc() -> str:
+    """Return a usable solc version, preferring a native system solc.
+
+    solcx's downloaded macOS binaries are x86_64; on Apple Silicon without Rosetta
+    they fail with 'Bad CPU type'. If a native solc is on PATH (e.g.
+    `brew install solidity`), import and use it; otherwise fall back to the
+    solcx-managed download (works on x86 / Linux / CI)."""
+    import solcx
+    try:
+        solcx.import_installed_solc()
+        versions = solcx.get_installed_solc_versions()
+        usable = [v for v in versions if str(v) >= _SOLC_VERSION]
+        if usable:
+            v = max(usable)
+            solcx.set_solc_version(v)
+            return str(v)
+    except Exception:
+        pass
+    solcx.install_solc(_SOLC_VERSION)
+    solcx.set_solc_version(_SOLC_VERSION)
+    return _SOLC_VERSION
 
 
 def _compile(name: str, evm_version: str = "istanbul") -> tuple[list, str]:
@@ -37,9 +60,8 @@ def _compile(name: str, evm_version: str = "istanbul") -> tuple[list, str]:
     pre-Shanghai clients (e.g. Geth 1.9.x) reject as an invalid opcode. Istanbul
     bytecode runs on any Istanbul-or-newer chain.
     """
-    from solcx import compile_standard, install_solc, set_solc_version
-    install_solc(_SOLC_VERSION)
-    set_solc_version(_SOLC_VERSION)
+    from solcx import compile_standard
+    solc_version = _ensure_solc()
     src = (_CONTRACTS / f"{name}.sol").read_text("utf-8")
     out = compile_standard(
         {
@@ -51,7 +73,7 @@ def _compile(name: str, evm_version: str = "istanbul") -> tuple[list, str]:
                 "outputSelection": {"*": {"*": ["abi", "evm.bytecode.object"]}},
             },
         },
-        solc_version=_SOLC_VERSION,
+        solc_version=solc_version,
     )
     c = out["contracts"][f"{name}.sol"][name]
     return c["abi"], c["evm"]["bytecode"]["object"]
@@ -119,10 +141,14 @@ def main(argv: list[str] | None = None) -> int:
     contract = w3.eth.contract(abi=abi, bytecode=bytecode)
     nonce = w3.eth.get_transaction_count(acct.address, "pending")
     ctor = contract.constructor()
-    gas = ctor.estimate_gas({"from": acct.address})
+    try:
+        gas = int(ctor.estimate_gas({"from": acct.address}) * 1.2)
+    except Exception as exc:
+        gas = 1_500_000   # old nodes reject estimateGas's block param; use a ceiling
+        print(f"estimate_gas unavailable ({exc}); using fixed gas={gas}")
     tx = ctor.build_transaction({
         "chainId": chain_id, "from": acct.address, "nonce": nonce,
-        "gas": int(gas * 1.2), **_gas_fields(w3, args.legacy_gas),
+        "gas": gas, **_gas_fields(w3, args.legacy_gas),
     })
     signed = acct.sign_transaction(tx)
     raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
@@ -134,9 +160,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     addr = receipt["contractAddress"]
     print(f"\nAgreementRegistry deployed at {addr}  (tx {tx_hash.hex()}, block {receipt['blockNumber']})")
-    print("\n# Add to .env:")
+    print("\n# Add to .env (private key not echoed — keep the one you deployed with):")
     print(f"FANGO_CHAIN_RPC_URL={args.rpc}")
-    print(f"FANGO_CHAIN_PRIVATE_KEY={args.key}")
+    print("FANGO_CHAIN_PRIVATE_KEY=<the key you used>")
     print(f"FANGO_CHAIN_CONTRACT_ADDR={addr}")
     print(f"FANGO_CHAIN_ID={chain_id}")
     if args.legacy_gas:

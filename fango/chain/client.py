@@ -20,6 +20,24 @@ from ..config import ChainSettings, load_chain_settings
 
 log = logging.getLogger(__name__)
 
+def _inject_poa_middleware(w3) -> None:
+    """POA chains (Geth clique, e.g. Recika) carry >32-byte ``extraData`` in block
+    headers, which web3 can't decode by default — block/log reads then raise. Inject
+    the POA middleware (name varies across web3 versions). Best-effort, no-op on
+    chains/versions where it isn't needed/available."""
+    try:
+        from web3.middleware import ExtraDataToPOAMiddleware  # web3 >= 7
+        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        return
+    except Exception:
+        pass
+    try:
+        from web3.middleware import geth_poa_middleware  # web3 < 7
+        w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+    except Exception:
+        pass
+
+
 _CONTRACTS = Path(__file__).parent / "contracts"
 _ABI_PATH = _CONTRACTS / "AgreementRegistry.abi.json"
 _ESCROW_ABI_PATH = _CONTRACTS / "DealEscrow.abi.json"
@@ -77,6 +95,7 @@ class Web3ChainClient:
             return
         try:
             self._w3 = Web3(Web3.HTTPProvider(self.s.rpc_url, request_kwargs={"timeout": 30}))
+            _inject_poa_middleware(self._w3)
             self._acct = self._w3.eth.account.from_key(self.s.private_key)
             if self.s.is_configured():
                 self._contract = self._w3.eth.contract(
@@ -121,6 +140,16 @@ class Web3ChainClient:
             "maxPriorityFeePerGas": self._w3.to_wei(1.5, "gwei"),
         }
 
+    def _estimate_gas(self, fn, *, fallback: int = 600_000) -> int:
+        """Estimate gas with a fixed fallback. Older nodes (e.g. Geth 1.9.x)
+        reject web3.py's ``eth_estimateGas`` block param ('too many arguments');
+        in that case use a safe ceiling rather than failing the tx."""
+        try:
+            return int(fn.estimate_gas({"from": self._acct.address}) * 1.2)
+        except Exception as exc:
+            log.debug("estimate_gas failed (%s); using fallback %d", exc, fallback)
+            return fallback
+
     # -- operations --------------------------------------------------------
     def anchor(self, content_hash: str, metadata: dict[str, Any]) -> dict[str, Any]:
         """Submit an anchoring tx and wait for the receipt. Never raises."""
@@ -136,12 +165,11 @@ class Web3ChainClient:
                 int(metadata["party_b"]),
             )
             nonce = self._w3.eth.get_transaction_count(self._acct.address, "pending")
-            gas = fn.estimate_gas({"from": self._acct.address})
             tx = fn.build_transaction({
                 "chainId": self.s.chain_id,
                 "from": self._acct.address,
                 "nonce": nonce,
-                "gas": int(gas * 1.2),
+                "gas": self._estimate_gas(fn),
                 **self._gas_fields(),
             })
             signed = self._acct.sign_transaction(tx)
@@ -189,10 +217,9 @@ class Web3ChainClient:
         """Build/sign/send a tx from the FANGO owner key (mirrors anchor())."""
         try:
             nonce = self._w3.eth.get_transaction_count(self._acct.address, "pending")
-            gas = fn.estimate_gas({"from": self._acct.address})
             tx = fn.build_transaction({
                 "chainId": self.s.chain_id, "from": self._acct.address, "nonce": nonce,
-                "gas": int(gas * 1.2), **self._gas_fields(),
+                "gas": self._estimate_gas(fn), **self._gas_fields(),
             })
             signed = self._acct.sign_transaction(tx)
             raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction

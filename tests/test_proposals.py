@@ -97,7 +97,16 @@ def test_accept_creates_and_anchors_agreement(tmp_db, fake_chain):
 
 
 def test_accept_offchain_when_chain_off(tmp_db):
-    # No fake_chain fixture → chain unconfigured → agreement created but unanchored.
+    # Force the chain OFF deterministically (don't rely on ambient .env, which
+    # may carry real chain config — config.py auto-loads it on import).
+    set_chain_client(FakeChainClient(configured=False))
+    try:
+        _run_offchain_accept(tmp_db)
+    finally:
+        set_chain_client(None)
+
+
+def _run_offchain_accept(tmp_db):
     broker, listing, customer, iid = _setup_inquiry(tmp_db)
     res = proposals.create_proposal(broker.id, iid, listing.id, "rental", _RENT_TERMS)
     out = proposals.accept_proposal(res["proposal_id"], customer.id)

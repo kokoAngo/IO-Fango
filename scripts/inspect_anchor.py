@@ -76,6 +76,11 @@ def _gather(agreement_id: int) -> dict:
         return out
     try:
         w3 = Web3(Web3.HTTPProvider(settings.rpc_url, request_kwargs={"timeout": 30}))
+        try:  # POA chains (e.g. Recika) need this for block/log reads
+            from fango.chain.client import _inject_poa_middleware
+            _inject_poa_middleware(w3)
+        except Exception:
+            pass
         abi = json.loads(Path(_ABI_PATH).read_text("utf-8"))
         c = w3.eth.contract(address=Web3.to_checksum_address(settings.contract_addr), abi=abi)
         tx = w3.eth.get_transaction(tx_hash)
