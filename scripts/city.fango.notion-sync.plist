@@ -14,10 +14,10 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
-    <string>/Users/geng/Project/AIAgent2/scripts/sync_notion.sh</string>
+    <string>/Users/geng/Project/FangoCity/scripts/sync_notion.sh</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/geng/Project/AIAgent2</string>
+  <string>/Users/geng/Project/FangoCity</string>
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
