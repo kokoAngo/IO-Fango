@@ -29,8 +29,14 @@ _CONTRACTS = REPO_ROOT / "fango" / "chain" / "contracts"
 _SOLC_VERSION = "0.8.20"
 
 
-def _compile(name: str) -> tuple[list, str]:
-    """Compile <name>.sol → (abi, bytecode_hex). Installs solc if needed."""
+def _compile(name: str, evm_version: str = "istanbul") -> tuple[list, str]:
+    """Compile <name>.sol → (abi, bytecode_hex). Installs solc if needed.
+
+    evm_version defaults to ``istanbul`` so the bytecode runs on older EVM nodes:
+    solc 0.8.20 targets ``shanghai`` by default and emits the PUSH0 opcode, which
+    pre-Shanghai clients (e.g. Geth 1.9.x) reject as an invalid opcode. Istanbul
+    bytecode runs on any Istanbul-or-newer chain.
+    """
     from solcx import compile_standard, install_solc, set_solc_version
     install_solc(_SOLC_VERSION)
     set_solc_version(_SOLC_VERSION)
@@ -41,6 +47,7 @@ def _compile(name: str) -> tuple[list, str]:
             "sources": {f"{name}.sol": {"content": src}},
             "settings": {
                 "optimizer": {"enabled": True, "runs": 200},
+                "evmVersion": evm_version,
                 "outputSelection": {"*": {"*": ["abi", "evm.bytecode.object"]}},
             },
         },
@@ -67,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--key", default=os.environ.get("FANGO_CHAIN_PRIVATE_KEY"))
     parser.add_argument("--legacy-gas", action="store_true",
                         default=os.environ.get("FANGO_CHAIN_LEGACY_GAS", "").lower() in ("1", "true", "yes"))
+    parser.add_argument("--evm-version", default="istanbul",
+                        help="solc target EVM version (default istanbul, for older nodes)")
     args = parser.parse_args(argv)
     if not args.rpc or not args.key:
         parser.error("--rpc and --key required (or set FANGO_CHAIN_RPC_URL / FANGO_CHAIN_PRIVATE_KEY)")
@@ -94,8 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         print("⚠ deployer has zero balance — fund it for gas before deploying", file=sys.stderr)
         return 1
 
-    print(f"compiling AgreementRegistry.sol (solc {_SOLC_VERSION}) …")
-    abi, bytecode = _compile("AgreementRegistry")
+    print(f"compiling AgreementRegistry.sol (solc {_SOLC_VERSION}, evm={args.evm_version}) …")
+    abi, bytecode = _compile("AgreementRegistry", evm_version=args.evm_version)
 
     # Sanity: compiled ABI should match the checked-in one the client loads.
     checked_in = json.loads((_CONTRACTS / "AgreementRegistry.abi.json").read_text("utf-8"))
