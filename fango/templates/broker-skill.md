@@ -14,9 +14,15 @@
 
 ## 接続
 
-MCP で `{{ base_url }}` に接続し、`Authorization: Bearer <仲介キー>` か
-`X-Agent-Key: <仲介キー>` を送ってください。最初に `broker_whoami` を呼んで、会社名と
-`eth_address`、在庫件数・未読問い合わせ件数を確認します。
+MCP サーバー URL は `{{ base_url }}/mcp2/mcp`。仲介キーは次のいずれかで渡します:
+
+- **URL クエリ（最も確実）**: `{{ base_url }}/mcp2/mcp?agent_key=<仲介キー>`
+  — ヘッダーを設定できないクライアント（Claude のカスタムコネクタ等）向け。
+- **ヘッダー**: `X-Agent-Key: <仲介キー>`
+
+⚠️ `Authorization: Bearer` は **OAuth トークン専用**で、生の仲介キーには使えません
+（`agent key required` になります）。最初に `broker_whoami` を呼んで、会社名・
+`eth_address`・在庫件数・未読問い合わせ件数を確認してください。
 
 ## 基本ループ（非同期）
 

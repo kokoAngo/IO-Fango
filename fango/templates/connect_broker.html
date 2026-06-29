@@ -33,16 +33,17 @@
 
   <h2>認証の渡し方</h2>
   <ul class="connect-steps">
-    <li><strong>ヘッダー対応クライアント（CLI / 設定ファイル）</strong>：
-      リクエストヘッダーに <code>X-Agent-Key: &lt;仲介キー&gt;</code>
-      （または <code>Authorization: Bearer &lt;仲介キー&gt;</code>）を付ける。</li>
-    <li><strong>ヘッダーを設定できない場合（Claude のカスタムコネクタ等）</strong>：
-      URL にクエリで付ける（MCP パスのみ有効）：
+    <li><strong>URL にクエリで付ける（最も確実・推奨）</strong>：
+      ヘッダーを設定できないクライアント（Claude のカスタムコネクタ等）はこちら。
       <span class="connect-copy inline" data-copy="{{ mcp_url }}?agent_key=YOUR_BROKER_KEY">
         <code>{{ mcp_url }}?agent_key=YOUR_BROKER_KEY</code>
         <button type="button" class="connect-copy-btn" aria-label="コピー">コピー</button>
       </span>
       <span class="muted">（<code>YOUR_BROKER_KEY</code> を実際のキーに置き換え。キーは秘密に保管してください）</span></li>
+    <li><strong>ヘッダー対応クライアント（CLI / 設定ファイル）</strong>：
+      リクエストヘッダーに <code>X-Agent-Key: &lt;仲介キー&gt;</code> を付ける。</li>
+    <li class="muted">⚠️ <code>Authorization: Bearer</code> は OAuth トークン専用で、
+      生の仲介キーには使えません（<code>agent key required</code> になります）。</li>
   </ul>
 
   <h2>接続後の流れ</h2>
