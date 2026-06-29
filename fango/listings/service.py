@@ -35,6 +35,7 @@ LISTING_COLUMNS = (
     "structure", "floor", "total_floors", "direction", "parking",
     "pet_allowed", "renovation", "listing_type", "transaction_type",
     "url", "agent_company", "ad_status", "raw_json", "last_seen_at",
+    "broker_agent_id",
 )
 
 # Whitelisted sort options for search_listings().
@@ -283,6 +284,16 @@ def _build_search_where(criteria: dict[str, Any]) -> tuple[str, list[Any], str]:
         placeholders = ",".join("?" * len(only_ids))
         where.append(f"listings.id IN ({placeholders})")
         params.extend(only_ids)
+
+    # Broker scoping. `broker_agent_id` restricts to one broker's inventory
+    # (a broker browsing/managing its own rows); `broker_owned_only` keeps only
+    # rows owned by *some* broker (NULL = central/ingested 在庫), used by
+    # consult auto-routing to match customer demand against broker inventory.
+    if criteria.get("broker_agent_id") is not None:
+        where.append("listings.broker_agent_id = ?")
+        params.append(criteria["broker_agent_id"])
+    if criteria.get("broker_owned_only"):
+        where.append("listings.broker_agent_id IS NOT NULL")
 
     # Sale (売買) listings are only recommended while 取引状況 = 公開中 (on-market),
     # so we never surface 成約済み / 申込あり / 一時停止 ones (legally important:

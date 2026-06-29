@@ -309,6 +309,14 @@ def get_or_create_post_agent_id(
     try:
         name = "anon_" + secrets.token_urlsafe(8)
         agent, _key = create_agent(name, vendor="anon", conn=conn)
+        # Random ephemeral on-chain identity for the customer agent (counterpart
+        # to a broker's fixed identity) so agreements can name both parties.
+        # Best-effort: no-op without identity libs/secret.
+        try:
+            from ..identity import provision_server_identity
+            provision_server_identity(agent.id, conn=conn)
+        except Exception:
+            pass
         conn.execute(
             "UPDATE consult_sessions SET post_agent_id = ? WHERE id = ?",
             (agent.id, session.id),

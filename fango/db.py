@@ -39,6 +39,8 @@ _LISTINGS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
     ("key_money_text", "TEXT"),
     ("tenancy_status", "TEXT"),
     ("ad_status", "TEXT"),
+    # Owning broker (中介) — NULL means central/ingested 在庫 visible to all.
+    ("broker_agent_id", "INTEGER"),
 )
 
 # Columns added to consult_sessions after the table first shipped (auto-post
@@ -84,7 +86,12 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
     # Index references rent_yen which only exists after the ALTER above succeeds,
     # so it is created here (out of schema.sql) to handle the old-DB case.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_rent ON listings(rent_yen)")
+    # broker_agent_id added just above; index it (out of schema.sql for old DBs).
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_broker ON listings(broker_agent_id)")
     _add_missing_columns(conn, "consult_sessions", _CONSULT_SESSIONS_NEW_COLUMNS)
+    # Broker self-onboarding fields on agent_claims (see fango/claims.py).
+    _add_missing_columns(conn, "agent_claims",
+                         (("company", "TEXT"), ("areas_json", "TEXT"), ("license_no", "TEXT")))
     _add_missing_columns(conn, "agents", _AGENTS_IDENTITY_COLUMNS)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_eth_address "
                  "ON agents(eth_address) WHERE eth_address IS NOT NULL")

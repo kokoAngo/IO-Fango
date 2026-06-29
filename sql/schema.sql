@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS listings (
     transaction_type    TEXT,
     url                 TEXT,
     agent_company       TEXT,
+    broker_agent_id     INTEGER REFERENCES agents(id),  -- owning broker (NULL = central/ingested 在庫)
     ad_status           TEXT,   -- source 「広告可」: 可/おすすめ/不可（…）/確認待ち/-- etc.
     raw_json            TEXT,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -240,7 +241,11 @@ CREATE TABLE IF NOT EXISTS agent_claims (
     created_ip   TEXT,
     created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     redeemed_at  TEXT,
-    agent_id     INTEGER REFERENCES agents(id) ON DELETE SET NULL
+    agent_id     INTEGER REFERENCES agents(id) ON DELETE SET NULL,
+    -- Broker (vendor='broker') self-onboarding fields; NULL for normal agents.
+    company      TEXT,
+    areas_json   TEXT,
+    license_no   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_claims_unredeemed
     ON agent_claims(redeemed_at) WHERE redeemed_at IS NULL;
@@ -367,6 +372,58 @@ CREATE TABLE IF NOT EXISTS saved_search_matches (
 );
 CREATE INDEX IF NOT EXISTS idx_ssm_unnotified
     ON saved_search_matches(saved_search_id, notified_at);
+
+-- ============================================================================
+-- Brokers (中介) + inquiry routing.
+-- A broker is an ordinary agents row with vendor='broker'; this side-table
+-- holds its broker-specific profile. Customer consults are auto-routed to
+-- brokers whose inventory matches; brokers poll for new inquiries and reply
+-- into the same forum thread (async, mirrors saved_search notification).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS brokers (
+    agent_id   INTEGER PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    company    TEXT NOT NULL,          -- 商号 (brand name shown on broker posts)
+    license_no TEXT,                   -- 宅建業免許番号 (future verification)
+    areas_json TEXT,                   -- JSON array of served wards/cities (routing hint)
+    bio        TEXT,
+    contact    TEXT,
+    active     INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_brokers_company ON brokers(company);
+
+-- A customer consult routed to one or more brokers.
+CREATE TABLE IF NOT EXISTS broker_inquiries (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_agent_id        INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    consult_session_id       TEXT REFERENCES consult_sessions(id) ON DELETE SET NULL,
+    thread_id                INTEGER REFERENCES threads(id) ON DELETE SET NULL,
+    forum                    TEXT,
+    criteria_json            TEXT NOT NULL,
+    matched_listing_ids_json TEXT,
+    status                   TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open','responded','closed')),
+    created_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    responded_at             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_inq_customer
+    ON broker_inquiries(customer_agent_id, created_at);
+
+-- Fan-out journal: one row per (inquiry, matched broker). notified_at doubles
+-- as the per-broker poll cursor (mirror of saved_search_matches).
+CREATE TABLE IF NOT EXISTS broker_inquiry_routes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    inquiry_id      INTEGER NOT NULL REFERENCES broker_inquiries(id) ON DELETE CASCADE,
+    broker_agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    match_score     INTEGER,
+    status          TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','accepted','declined')),
+    matched_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    notified_at     TEXT,
+    UNIQUE(inquiry_id, broker_agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bir_unnotified
+    ON broker_inquiry_routes(broker_agent_id, notified_at);
 
 -- ============================================================================
 -- Consult sessions + messages (server-side state for fango_consult).

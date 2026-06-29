@@ -51,6 +51,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = PACKAGE_DIR / "templates"
 STATIC_DIR = PACKAGE_DIR / "static"
 SKILL_MD_PATH = TEMPLATE_DIR / "real-estate-search-skill.md"
+BROKER_SKILL_MD_PATH = TEMPLATE_DIR / "broker-skill.md"
 
 # Repo-root anchor for the listing image endpoint. ``listing_images.rel_path``
 # is stored relative to this directory.
@@ -730,6 +731,27 @@ def _register_routes(app: FastAPI) -> None:
         )
         return PlainTextResponse(rendered, media_type="text/markdown; charset=utf-8")
 
+    @app.get("/fangobook/broker-skill.md", response_class=PlainTextResponse)
+    async def broker_skill_md(request: Request):
+        """Broker-facing skill doc (for external 仲介 agents using broker_* tools)."""
+        import hashlib
+        base_url = f"{request.url.scheme}://{request.url.netloc}"
+        try:
+            raw = BROKER_SKILL_MD_PATH.read_text(encoding="utf-8")
+        except OSError:
+            return PlainTextResponse("not found", status_code=404)
+        ver = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        from datetime import datetime, timezone
+        try:
+            mtime = BROKER_SKILL_MD_PATH.stat().st_mtime
+            updated = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except OSError:
+            updated = None
+        rendered = templates.env.from_string(raw).render(
+            base_url=base_url, skill_version=ver, skill_updated_at=updated,
+        )
+        return PlainTextResponse(rendered, media_type="text/markdown; charset=utf-8")
+
     @app.get("/fangobook/skill.md", include_in_schema=False)
     async def skill_md_legacy_redirect():
         """Permanent redirect for agents that cached the old URL."""
@@ -896,6 +918,13 @@ def _register_routes(app: FastAPI) -> None:
         ctx = shared_ctx(request, active_nav="connect")
         return templates.TemplateResponse(request, "connect.html", ctx)
 
+    @app.get("/connect/broker", response_class=HTMLResponse)
+    async def connect_broker_page(request: Request):
+        """Broker-facing setup guide: connect an external 仲介 agent with a
+        broker key and use the broker_* tools."""
+        ctx = shared_ctx(request, active_nav="connect")
+        return templates.TemplateResponse(request, "connect_broker.html", ctx)
+
     @app.get("/explorer", response_class=HTMLResponse)
     @app.get("/explorer/", response_class=HTMLResponse)
     async def explorer_index(request: Request, q: str = ""):
@@ -1054,6 +1083,46 @@ def _register_routes(app: FastAPI) -> None:
         except Exception as exc:
             ctx.update({"error": f"作成失敗: {exc}"})
             return templates.TemplateResponse(request, "claim.html", ctx)
+        host = f"{request.url.scheme}://{request.url.netloc}"
+        ctx.update({"claim": claim, "host": host})
+        return templates.TemplateResponse(request, "claim_result.html", ctx)
+
+    @app.get("/onboard/broker", response_class=HTMLResponse)
+    async def broker_claim_form(request: Request):
+        ctx = shared_ctx(request, active_nav="onboard")
+        return templates.TemplateResponse(request, "claim_broker.html", ctx)
+
+    @app.post("/onboard/broker", response_class=HTMLResponse)
+    async def broker_claim_submit(
+        request: Request,
+        name: str = Form(...),
+        company: str = Form(""),
+        areas: str = Form(""),
+        license_no: str = Form(""),
+        captcha: str = Form(""),
+    ):
+        from .claims import ClaimError, create_claim
+        from .rate_limit import CLAIM_IP, check_and_record, RateLimitError
+        ip = _client_ip(request)
+        ctx = shared_ctx(request, active_nav="onboard")
+        if captcha != "on":
+            ctx.update({"error": "人間チェックボックスを確認してください"})
+            return templates.TemplateResponse(request, "claim_broker.html", ctx)
+        try:
+            check_and_record("claim_ip", ip, CLAIM_IP)
+        except RateLimitError as exc:
+            ctx.update({"error": f"レート制限: {exc.retry_after_seconds} 秒後に再試行してください"})
+            return templates.TemplateResponse(request, "claim_broker.html", ctx)
+        area_list = [a.strip() for a in (areas or "").replace("、", ",").split(",") if a.strip()]
+        try:
+            claim = create_claim(name=name, vendor="broker", ip=ip,
+                                 company=company, areas=area_list, license_no=license_no)
+        except ClaimError as exc:
+            ctx.update({"error": str(exc)})
+            return templates.TemplateResponse(request, "claim_broker.html", ctx)
+        except Exception as exc:
+            ctx.update({"error": f"作成失敗: {exc}"})
+            return templates.TemplateResponse(request, "claim_broker.html", ctx)
         host = f"{request.url.scheme}://{request.url.netloc}"
         ctx.update({"claim": claim, "host": host})
         return templates.TemplateResponse(request, "claim_result.html", ctx)

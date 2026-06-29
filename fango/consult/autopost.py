@@ -253,6 +253,7 @@ def record_turn(
             "posted": True,
             "forum": forum,
             "thread_id": thread_id,
+            "post_agent_id": post_author_id,
             "reason": "",
         }
     except Exception as exc:  # pragma: no cover - best effort
@@ -266,6 +267,95 @@ def record_turn(
     finally:
         if owns_conn:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Broker auto-routing
+# ---------------------------------------------------------------------------
+
+# Cap the number of brokers a single inquiry fans out to.
+_MAX_ROUTED_BROKERS = 3
+
+
+def route_to_brokers(
+    *,
+    thread_id: int,
+    forum: str,
+    criteria: dict[str, Any],
+    customer_post_agent_id: int,
+    consult_session_id: str | None = None,
+    conn=None,
+) -> dict[str, Any]:
+    """Match a ready consult against broker inventory and route an inquiry.
+
+    Brokers are external and asynchronous, so this never waits on them: it just
+    records an inquiry pointing at the existing consult thread and fans it out to
+    the brokers whose inventory fits. They poll ``broker_get_new_inquiries`` and
+    reply into the same thread. Pure SQL over the already-extracted criteria — no
+    LLM call. Best-effort: never raises (mirrors :func:`record_turn`). Returns
+    ``{"routed": N, "broker_count": N, "inquiry_id": id|None}``.
+    """
+    null = {"routed": 0, "broker_count": 0, "inquiry_id": None}
+    try:
+        # Only real-estate boards with an actual search signal can be matched
+        # against inventory; chat/dojo turns have nothing to route.
+        if forum not in _SEARCH_FORUMS or not _has_search_signal(criteria):
+            return null
+
+        from ..brokers import inquiries as _inq
+
+        owns_conn = conn is None
+        if conn is None:
+            conn = connect()
+        try:
+            broker_scores = _inq.match_brokers_for(
+                criteria, limit=_MAX_ROUTED_BROKERS, conn=conn
+            )
+            if not broker_scores:
+                return null
+
+            # Collect the matched listing ids (the brokers' rows that fit) so the
+            # broker sees exactly what was matched.
+            from ..listings import service as ls
+            crit = dict(criteria or {})
+            crit["broker_owned_only"] = True
+            matched = ls.search_listings(criteria=crit, limit=30, conn=conn)
+            matched_ids = [l.id for l in matched]
+
+            inquiry_id = _inq.create_inquiry(
+                customer_post_agent_id,
+                criteria,
+                consult_session_id=consult_session_id,
+                thread_id=thread_id,
+                forum=forum,
+                matched_listing_ids=matched_ids,
+                conn=conn,
+            )
+            routed = _inq.route_inquiry(inquiry_id, broker_scores, conn=conn)
+
+            # A short system note so the customer (and forum readers) know the
+            # inquiry was handed to brokers and an async reply is coming.
+            try:
+                from ..auth import get_or_create_system_agent
+                system = get_or_create_system_agent(conn=conn)
+                note = (f"この条件に合う在庫を持つ仲介 {len(broker_scores)} 社にお繋ぎしました。"
+                        "担当エージェントの返信をお待ちください。")
+                forum_core.reply(forum, thread_id, note, system.id,
+                                 tags=["consult", "routed"], conn=conn)
+            except Exception:
+                pass
+
+            return {
+                "routed": routed,
+                "broker_count": len(broker_scores),
+                "inquiry_id": inquiry_id,
+            }
+        finally:
+            if owns_conn:
+                conn.close()
+    except Exception as exc:  # pragma: no cover - best effort
+        log.warning("broker routing failed for thread %s: %s", thread_id, exc)
+        return null
 
 
 # ---------------------------------------------------------------------------

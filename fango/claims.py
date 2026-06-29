@@ -37,6 +37,13 @@ class Claim:
     created_at: str
     redeemed_at: str | None
     agent_id: int | None
+    company: str | None = None
+    areas_json: str | None = None
+    license_no: str | None = None
+
+
+_CLAIM_FIELDS = ("code", "name", "vendor", "created_at", "redeemed_at",
+                 "agent_id", "company", "areas_json", "license_no")
 
 
 def _now() -> datetime:
@@ -60,9 +67,16 @@ def normalize_code(code: str) -> str:
 
 def create_claim(
     *, name: str, vendor: str | None, ip: str | None = None,
+    company: str | None = None, areas: list[str] | None = None,
+    license_no: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> Claim:
-    """Reserve a (name, vendor) pair behind a one-time code."""
+    """Reserve a (name, vendor) pair behind a one-time code.
+
+    For broker self-onboarding (``vendor='broker'``) the broker profile fields
+    (company/areas/license) are captured here and applied at redeem time.
+    """
+    import json as _json
     name = (name or "").strip()
     if not name:
         raise ClaimError("name required")
@@ -70,6 +84,16 @@ def create_claim(
         raise ClaimError("name too long (max 40 chars)")
     if vendor:
         vendor = vendor.strip()[:40]
+
+    if vendor == "broker":
+        company = (company or "").strip()
+        if not company:
+            raise ClaimError("company (商号) required for a broker")
+        if len(company) > 80:
+            raise ClaimError("company too long (max 80 chars)")
+    areas_json = _json.dumps([a.strip() for a in (areas or []) if a.strip()],
+                             ensure_ascii=False) if areas else None
+    license_no = (license_no or "").strip()[:60] or None
 
     owns_conn = conn is None
     if conn is None:
@@ -80,9 +104,10 @@ def create_claim(
             code = generate_code()
             try:
                 conn.execute(
-                    """INSERT INTO agent_claims(code, name, vendor, created_ip)
-                       VALUES (?, ?, ?, ?)""",
-                    (code, name, vendor, ip),
+                    """INSERT INTO agent_claims(code, name, vendor, created_ip,
+                                                company, areas_json, license_no)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (code, name, vendor, ip, company, areas_json, license_no),
                 )
                 break
             except sqlite3.IntegrityError:
@@ -93,9 +118,7 @@ def create_claim(
         row = conn.execute(
             "SELECT * FROM agent_claims WHERE code = ?", (code,)
         ).fetchone()
-        return Claim(**{k: row[k] for k in
-                        ("code", "name", "vendor", "created_at",
-                         "redeemed_at", "agent_id")})
+        return Claim(**{k: row[k] for k in _CLAIM_FIELDS})
     finally:
         if owns_conn:
             conn.close()
@@ -134,18 +157,32 @@ def redeem_claim(
             if (_now() - created).total_seconds() > CODE_TTL_SECONDS:
                 raise ClaimError("code expired")
 
-            # Mint real agent
-            agent, key = create_agent(
-                name=row["name"], vendor=row["vendor"], conn=conn,
-            )
-            # Provision a durable secp256k1 identity for this keyed agent
-            # (best-effort; no-op when identity libs/secret are absent). Same
-            # conn ⇒ part of this transaction, committed by the `with` block.
-            try:
-                from .identity import provision_server_identity
-                provision_server_identity(agent.id, conn=conn)
-            except Exception:  # pragma: no cover - identity must not block redeem
-                pass
+            # Mint the real agent. Brokers go through create_broker, which also
+            # writes the broker profile row and provisions a FIXED on-chain
+            # identity. Normal agents get a plain record + best-effort identity.
+            if row["vendor"] == "broker" and (row["company"] or "").strip():
+                import json as _json
+                from .brokers.service import create_broker
+                try:
+                    areas = _json.loads(row["areas_json"] or "[]")
+                except (ValueError, TypeError):
+                    areas = []
+                agent, key = create_broker(
+                    row["name"], row["company"], areas=areas,
+                    license_no=row["license_no"], conn=conn,
+                )
+            else:
+                agent, key = create_agent(
+                    name=row["name"], vendor=row["vendor"], conn=conn,
+                )
+                # Durable secp256k1 identity for this keyed agent (best-effort;
+                # no-op when identity libs/secret are absent). Same conn ⇒ part
+                # of this transaction, committed by the `with` block.
+                try:
+                    from .identity import provision_server_identity
+                    provision_server_identity(agent.id, conn=conn)
+                except Exception:  # pragma: no cover - identity must not block redeem
+                    pass
             conn.execute(
                 """UPDATE agent_claims SET redeemed_at = ?, agent_id = ?
                    WHERE code = ?""",
@@ -168,9 +205,7 @@ def get_claim(code: str, conn: sqlite3.Connection | None = None) -> Optional[Cla
         ).fetchone()
         if row is None:
             return None
-        return Claim(**{k: row[k] for k in
-                        ("code", "name", "vendor", "created_at",
-                         "redeemed_at", "agent_id")})
+        return Claim(**{k: row[k] for k in _CLAIM_FIELDS})
     finally:
         if owns_conn:
             conn.close()

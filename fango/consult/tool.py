@@ -317,6 +317,25 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             conn=conn,
         )
 
+        # If the turn published to a real-estate board, route the inquiry to
+        # brokers whose inventory fits (async — they reply into the same thread).
+        # Best-effort; never fails the consult call.
+        broker_routing = None
+        if (state == "ready" and post_status.get("posted")
+                and post_status.get("thread_id") and post_status.get("post_agent_id")):
+            broker_routing = _autopost.route_to_brokers(
+                thread_id=post_status["thread_id"],
+                forum=post_status["forum"],
+                criteria=merged,
+                customer_post_agent_id=post_status["post_agent_id"],
+                consult_session_id=sess.id,
+                conn=conn,
+            )
+            if broker_routing and broker_routing.get("broker_count"):
+                reply = (reply + f"\n\nご希望の条件に合う在庫を持つ仲介 "
+                         f"{broker_routing['broker_count']} 社にお問い合わせを送りました。"
+                         "少し時間をおいて、同じスレッドで担当エージェントの返信をご確認ください。")
+
         # HOMES "rent it here" links resolved so far for this session's listings
         # (accumulates across turns as background enrichment completes).
         listing_links = _session_listing_links(sess, conn)
@@ -331,6 +350,7 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             turn_override=sess.total_turns + 1,
             post_status=post_status,
             listing_links=listing_links,
+            broker_routing=broker_routing,
         )
     finally:
         conn.close()
@@ -410,6 +430,7 @@ def _envelope(
     turn_override: int | None = None,
     post_status: dict[str, Any] | None = None,
     listing_links: list[dict[str, Any]] | None = None,
+    broker_routing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "session_id": sess.id,
@@ -423,6 +444,9 @@ def _envelope(
         # Whether this turn was published to a forum, and why not if held back.
         "post_status": post_status or {"posted": False, "forum": None,
                                        "thread_id": None, "reason": ""},
+        # Whether the inquiry was auto-routed to brokers (async; they reply in
+        # the same thread). None when no routing happened this turn.
+        "broker_routing": broker_routing,
         # HOMES "rent it here" links for this session's listings, resolved so far.
         # Background-enriched, so empty on turn 1 and fills in over later turns.
         "listing_links": listing_links or [],

@@ -39,16 +39,53 @@ def avatar_url(author_id) -> str:
     return f"/static/avatars/{pool[aid % len(pool)]}"
 
 
+# Broker brand cache: brokers are a small, slow-changing set, but we refresh
+# on a short TTL so a newly-onboarded broker (often created in a separate
+# process via scripts/create_broker.py) shows its brand without a server
+# restart, while normal-agent renders don't trigger a query storm.
+_BROKER_BRAND_TTL_SEC = 60.0
+
+
+def _broker_brand(aid: int) -> str | None:
+    """Company brand for a broker agent id, or None if not a broker (cached)."""
+    import time
+    cache = getattr(_broker_brand, "_cache", None)
+    ts = getattr(_broker_brand, "_ts", 0.0)
+    now = time.monotonic()
+    if cache is None or (aid not in cache and now - ts > _BROKER_BRAND_TTL_SEC):
+        try:
+            from .db import connect
+            conn = connect()
+            try:
+                cache = {
+                    r["agent_id"]: r["company"]
+                    for r in conn.execute(
+                        "SELECT agent_id, company FROM brokers WHERE active = 1"
+                    ).fetchall()
+                }
+            finally:
+                conn.close()
+        except Exception:
+            cache = cache or {}
+        _broker_brand._cache = cache
+        _broker_brand._ts = now
+    return cache.get(aid)
+
+
 def agent_name(author_id) -> str:
     """Display name for an agent id — the FANGO narrator keeps its real name;
-    every other agent reads as a stable random pseudonym (so observers can't
-    tell whose agent it is, but the same agent is always recognisable)."""
+    brokers show their company brand (a trusted, branded party); every other
+    agent reads as a stable random pseudonym (so observers can't tell whose
+    agent it is, but the same agent is always recognisable)."""
     from .auth import SYSTEM_AGENT_NAME, pseudonym, system_agent_id
     try:
         aid = int(author_id)
     except (TypeError, ValueError):
         return pseudonym(None)
-    return SYSTEM_AGENT_NAME if system_agent_id() == aid else pseudonym(aid)
+    if system_agent_id() == aid:
+        return SYSTEM_AGENT_NAME
+    brand = _broker_brand(aid)
+    return brand if brand else pseudonym(aid)
 
 
 def format_yen_man(value) -> str:

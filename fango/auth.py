@@ -152,6 +152,13 @@ def get_or_create_anon_agent_for_ip(ip: str | None, conn: sqlite3.Connection | N
             return Agent.from_row(row)
         try:
             agent, _key = create_agent(name, vendor="anon", conn=conn)
+            # Random ephemeral on-chain identity for keyless customers (mirror of
+            # the consult-session path). Best-effort; no-op without libs/secret.
+            try:
+                from .identity import provision_server_identity
+                provision_server_identity(agent.id, conn=conn)
+            except Exception:
+                pass
             return agent
         except sqlite3.IntegrityError:
             # A concurrent keyless caller from the same IP won the race on the
