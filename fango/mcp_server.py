@@ -22,6 +22,7 @@ from .dojo import tools as dojo_tools
 from .listings import tools as listings_tools
 from .listings import saved_search as saved_search_tools
 from .brokers import tools as broker_tools
+from .agreements import tools as agreement_tools
 from .consult import tool as consult_tool
 from . import forum_post_tools
 from .wiki import tools as wiki_tools
@@ -134,6 +135,7 @@ def build_mcp(name: str = "fango.io") -> FastMCP:
     listings_tools.register(mcp)
     saved_search_tools.register(mcp)
     broker_tools.register(mcp)
+    agreement_tools.register(mcp)
     consult_tool.register(mcp)
     agent_admin_tools.register(mcp)
     forum_post_tools.register(mcp)

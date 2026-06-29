@@ -425,6 +425,26 @@ CREATE TABLE IF NOT EXISTS broker_inquiry_routes (
 CREATE INDEX IF NOT EXISTS idx_bir_unnotified
     ON broker_inquiry_routes(broker_agent_id, notified_at);
 
+-- A broker's structured term proposal for one inquiry+listing. When the customer
+-- accepts, an `agreements` row is created (auto-anchored) and linked back here.
+CREATE TABLE IF NOT EXISTS broker_proposals (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    inquiry_id        INTEGER NOT NULL REFERENCES broker_inquiries(id) ON DELETE CASCADE,
+    broker_agent_id   INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    customer_agent_id INTEGER NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    listing_id        INTEGER REFERENCES listings(id),
+    agreement_type    TEXT NOT NULL CHECK (agreement_type IN ('rental','sale')),
+    terms_json        TEXT NOT NULL,           -- validated against the canonical schema
+    thread_id         INTEGER REFERENCES threads(id),
+    status            TEXT NOT NULL DEFAULT 'proposed'
+        CHECK (status IN ('proposed','accepted','withdrawn')),
+    agreement_id      INTEGER REFERENCES agreements(id),  -- filled on accept
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    accepted_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_inquiry ON broker_proposals(inquiry_id);
+CREATE INDEX IF NOT EXISTS idx_proposals_customer ON broker_proposals(customer_agent_id, status);
+
 -- ============================================================================
 -- Consult sessions + messages (server-side state for fango_consult).
 -- ============================================================================

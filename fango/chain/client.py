@@ -96,6 +96,31 @@ class Web3ChainClient:
     def is_configured(self) -> bool:
         return self.s.is_configured() and not self._degraded and self._contract is not None
 
+    # -- gas pricing (EIP-1559 with legacy fallback) -----------------------
+    def _gas_fields(self) -> dict[str, Any]:
+        """Return the gas-pricing keys for build_transaction.
+
+        Prefers EIP-1559 (``maxFeePerGas``/``maxPriorityFeePerGas``); falls back
+        to legacy ``gasPrice`` when ``FANGO_CHAIN_LEGACY_GAS`` is set or the node
+        doesn't expose ``eth_feeHistory`` (private/older EVM chains). Detection is
+        cached on first use."""
+        if self.s.legacy_gas:
+            return {"gasPrice": self._w3.eth.gas_price}
+        cached = getattr(self, "_supports_1559", None)
+        if cached is None:
+            try:
+                self._w3.eth.fee_history(1, "latest", [50])
+                cached = True
+            except Exception:
+                cached = False
+            self._supports_1559 = cached
+        if not cached:
+            return {"gasPrice": self._w3.eth.gas_price}
+        return {
+            "maxFeePerGas": self._w3.eth.gas_price * 2,
+            "maxPriorityFeePerGas": self._w3.to_wei(1.5, "gwei"),
+        }
+
     # -- operations --------------------------------------------------------
     def anchor(self, content_hash: str, metadata: dict[str, Any]) -> dict[str, Any]:
         """Submit an anchoring tx and wait for the receipt. Never raises."""
@@ -117,8 +142,7 @@ class Web3ChainClient:
                 "from": self._acct.address,
                 "nonce": nonce,
                 "gas": int(gas * 1.2),
-                "maxFeePerGas": self._w3.eth.gas_price * 2,
-                "maxPriorityFeePerGas": self._w3.to_wei(1.5, "gwei"),
+                **self._gas_fields(),
             })
             signed = self._acct.sign_transaction(tx)
             raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction
@@ -168,8 +192,7 @@ class Web3ChainClient:
             gas = fn.estimate_gas({"from": self._acct.address})
             tx = fn.build_transaction({
                 "chainId": self.s.chain_id, "from": self._acct.address, "nonce": nonce,
-                "gas": int(gas * 1.2), "maxFeePerGas": self._w3.eth.gas_price * 2,
-                "maxPriorityFeePerGas": self._w3.to_wei(1.5, "gwei"),
+                "gas": int(gas * 1.2), **self._gas_fields(),
             })
             signed = self._acct.sign_transaction(tx)
             raw = getattr(signed, "raw_transaction", None) or signed.rawTransaction

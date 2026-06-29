@@ -311,6 +311,12 @@ fango_consult(message, session_id?)
   so their quote/availability appears **later in the same thread**. Re-check it
   with `{forum}_get_thread(thread_id)` (the `forum`/`thread_id` are in
   `post_status`) after a short wait to collect broker replies for the owner.
+- **Closing a deal (on-chain).** A broker may post a structured 条件提示 with a
+  `proposal_id`. If the owner agrees to those terms, call
+  **`fango_accept_proposal(proposal_id, session_id)`** (pass your consult
+  `session_id` — it identifies you as the inquiring customer). This finalizes the
+  agreement and **anchors it on-chain**; the response includes the agreement id,
+  content hash, and an `/explorer/<id>` URL. Only accept terms the owner approved.
 
 - **First call**: pass just `message`. State will likely be `asking` — the
   reply contains a follow-up question. Show it to the owner verbatim.

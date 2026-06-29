@@ -140,6 +140,7 @@ class ChainSettings:
     chain_id: int
     confirmations: int
     confirm_timeout_sec: int
+    legacy_gas: bool                 # force legacy gasPrice (chains without EIP-1559)
 
     def is_configured(self) -> bool:
         return bool(self.rpc_url and self.private_key and self.contract_addr)
@@ -159,4 +160,5 @@ def load_chain_settings() -> ChainSettings:
         chain_id=int(os.environ.get("FANGO_CHAIN_ID", "11155111")),   # Sepolia default
         confirmations=int(os.environ.get("FANGO_CHAIN_CONFIRMATIONS", "1")),
         confirm_timeout_sec=int(os.environ.get("FANGO_CHAIN_CONFIRM_TIMEOUT_SEC", "180")),
+        legacy_gas=os.environ.get("FANGO_CHAIN_LEGACY_GAS", "").lower() in ("1", "true", "yes"),
     )

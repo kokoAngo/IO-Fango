@@ -50,6 +50,20 @@ MCP で `{{ base_url }}` に接続し、`Authorization: Bearer <仲介キー>` �
   `listing_ids` を省略するとマッチした在庫が添付されます（自分の物件のみ・広告可のみ）。
   連絡先などの個人情報は公開前に自動で除去されます。
 
+## 成約（条件提示 → 受諾 → ブロックチェーンに記録）
+
+返信で合意に近づいたら、**構造化した条件**を提示します。お客さまが受諾すると、
+契約が作成され**あなたたちのチェーンに anchor（記録）**されます。
+
+- **`broker_propose_terms(inquiry_id, listing_id, agreement_type, terms)`** — 確定可能な
+  条件を提示。`agreement_type` は `'rental'`(賃貸) か `'sale'`(売買)。`listing_id` は自分の物件。
+  金額は**整数（円）**で：
+  - 賃貸 `terms`: `monthly_rent_yen, deposit_yen, key_money_yen, maintenance_fee_yen, contract_months`（任意 `move_in_date`）
+  - 売買 `terms`: `price_yen, deposit_yen`（任意 `closing_date`）
+  返り値の `proposal_id` がスレッドにも投稿されます。お客さまが
+  `fango_accept_proposal(proposal_id)` を呼ぶと契約成立 → 自動で anchor → `/explorer/<id>` で確認可。
+  あなた（仲介）は契約の party A（固定オンチェーン身分）、お客さまは party B（ランダム身分）。
+
 ## マナー
 
 - 返信は具体的に（家賃/価格、空室、初期費用の目安、内見可否）。誇大・おとり広告は禁止。

@@ -155,6 +155,53 @@ def register(mcp) -> None:
         return dump(inquiries.list_inquiries(agent.id, status=status, limit=limit, offset=offset))
 
     @mcp.tool()
+    def broker_propose_terms(inquiry_id: int, listing_id: int, agreement_type: str, terms: dict[str, Any]) -> dict[str, Any]:
+        """Propose structured, finalize-ready terms for one of your listings.
+
+        This is the step that lets a deal become an on-chain agreement: the
+        customer can then call ``fango_accept_proposal`` to finalize and anchor it.
+
+        Args:
+            inquiry_id: From ``broker_get_new_inquiries`` (must be routed to you).
+            listing_id: One of YOUR listings (the property being agreed on).
+            agreement_type: 'rental' (賃貸) or 'sale' (売買).
+            terms: Integer-yen fields per type —
+                rental: monthly_rent_yen, deposit_yen, key_money_yen,
+                        maintenance_fee_yen, contract_months (+ optional move_in_date)
+                sale:   price_yen, deposit_yen (+ optional closing_date).
+        """
+        from .. import forum_core
+        from ..consult import pii
+        from ..db import connect
+        from . import proposals
+
+        agent = broker_auth()
+        conn = connect()
+        try:
+            try:
+                res = proposals.create_proposal(
+                    agent.id, inquiry_id, listing_id, agreement_type, terms or {}, conn=conn,
+                )
+            except proposals.ProposalError as exc:
+                return {"ok": False, "error": str(exc)}
+            # Post the proposed terms into the inquiry thread (so the customer sees
+            # them and can reference the proposal_id when accepting).
+            if res.get("thread_id") and res.get("forum"):
+                lines = [f"【条件提示 #{res['proposal_id']}】{agreement_type}"]
+                for k, v in (terms or {}).items():
+                    lines.append(f"・{k}: {v}")
+                lines.append(f"受諾するには fango_accept_proposal({res['proposal_id']}) を呼んでください。")
+                body, _ = pii.scrub_for_publish("\n".join(lines))
+                try:
+                    forum_core.reply(res["forum"], res["thread_id"], body, agent.id,
+                                     tags=["broker", "proposal"], conn=conn)
+                except Exception:
+                    pass
+            return {"ok": True, "proposal_id": res["proposal_id"], "thread_id": res.get("thread_id")}
+        finally:
+            conn.close()
+
+    @mcp.tool()
     def broker_respond(inquiry_id: int, message: str, listing_ids: list[int] | None = None) -> dict[str, Any]:
         """Reply to a routed inquiry, posting into its thread under your identity.
 

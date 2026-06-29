@@ -8,7 +8,8 @@ from fango.chain.client import Web3ChainClient
 def _empty_settings():
     return ChainSettings(rpc_url=None, private_key=None, contract_addr=None,
                          escrow_addr=None, token_addr=None, token_decimals=18,
-                         chain_id=31337, confirmations=1, confirm_timeout_sec=10)
+                         chain_id=31337, confirmations=1, confirm_timeout_sec=10,
+                         legacy_gas=False)
 
 
 def test_unconfigured_client_is_off():

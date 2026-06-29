@@ -31,6 +31,7 @@ browser = [
 # gracefully (anchoring skipped) when web3 or FANGO_CHAIN_* config is absent.
 chain = [
     "web3>=6.0",
+    "py-solc-x>=2.0",   # compile fango/chain/contracts/*.sol for scripts/deploy_contracts.py
 ]
 # Durable secp256k1 agent identities (fango/identity.py). Optional: identity
 # provisioning is skipped when these are absent. eth-account also ships with web3.
