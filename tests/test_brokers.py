@@ -113,6 +113,32 @@ def test_get_routed_inquiry_enforces_ownership(tmp_db):
     assert inq.get_routed_inquiry(iid, b.id) is None  # not routed to B
 
 
+def test_route_to_brokers_uses_shown_listings(tmp_db):
+    # The customer-facing search may relax criteria, so routing must follow the
+    # listings actually shown — not a strict re-match that would find nothing.
+    from fango import forum_core
+    from fango.auth import create_agent
+    from fango.consult import autopost
+    a, _ = bsvc.create_broker("brokerA", "A社")
+    listing = bsvc.upsert_listing(a.id, _rent_listing(a.id))
+    cust, _ = create_agent("cust", vendor="anon")
+    thread, _q = forum_core.create_thread("chintai", "相談", "新宿で部屋を探しています。", cust.id)
+
+    # A criteria with a search signal but a keyword that matches nothing — a
+    # strict broker re-match would return 0; the shown listing must still route.
+    routing = autopost.route_to_brokers(
+        thread_id=thread.id, forum="chintai",
+        criteria={"prefecture": "東京都", "keyword": "no-such-building-xyz"},
+        customer_post_agent_id=cust.id,
+        result_listing_ids=[listing.id],
+    )
+    assert routing["broker_count"] == 1 and routing["routed"] == 1
+    # The broker sees that exact listing on its inquiry.
+    got = inq.fetch_new_inquiries(a.id)
+    assert len(got) == 1
+    assert listing.id in [m["id"] for m in got[0]["matched_listings"]]
+
+
 def test_broker_auth_rejects_non_broker(tmp_db, with_current_agent):
     from fango.auth import create_agent
     from fango.brokers.tools import broker_auth

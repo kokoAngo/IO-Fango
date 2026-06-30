@@ -323,12 +323,14 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
         broker_routing = None
         if (state == "ready" and post_status.get("posted")
                 and post_status.get("thread_id") and post_status.get("post_agent_id")):
+            shown_ids = [it.get("id") for it in (results_payload or {}).get("items", []) if it.get("id")]
             broker_routing = _autopost.route_to_brokers(
                 thread_id=post_status["thread_id"],
                 forum=post_status["forum"],
                 criteria=merged,
                 customer_post_agent_id=post_status["post_agent_id"],
                 consult_session_id=sess.id,
+                result_listing_ids=shown_ids,
                 conn=conn,
             )
             if broker_routing and broker_routing.get("broker_count"):

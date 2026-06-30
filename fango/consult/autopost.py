@@ -284,6 +284,7 @@ def route_to_brokers(
     criteria: dict[str, Any],
     customer_post_agent_id: int,
     consult_session_id: str | None = None,
+    result_listing_ids: list[int] | None = None,
     conn=None,
 ) -> dict[str, Any]:
     """Match a ready consult against broker inventory and route an inquiry.
@@ -308,37 +309,50 @@ def route_to_brokers(
         if conn is None:
             conn = connect()
         try:
-            broker_scores = _inq.match_brokers_for(
-                criteria, limit=_MAX_ROUTED_BROKERS, conn=conn
-            )
-            if not broker_scores:
+            # Prefer the brokers who own the listings ACTUALLY SHOWN to the
+            # customer: the customer-facing search may have relaxed the criteria
+            # (dropped a bad keyword, widened budget), so re-matching brokers on
+            # the raw criteria would miss them. Fall back to a criteria-based
+            # inventory match only when none of the shown listings are broker-owned.
+            owned: dict[int, list[int]] = {}
+            ids = [int(i) for i in (result_listing_ids or []) if i is not None]
+            if ids:
+                ph = ",".join("?" * len(ids))
+                for r in conn.execute(
+                    f"SELECT id, broker_agent_id FROM listings "
+                    f"WHERE id IN ({ph}) AND broker_agent_id IS NOT NULL", ids
+                ).fetchall():
+                    owned.setdefault(r["broker_agent_id"], []).append(r["id"])
+            if not owned:
+                for bid, _score in _inq.match_brokers_for(
+                    criteria, limit=_MAX_ROUTED_BROKERS, conn=conn
+                ):
+                    owned.setdefault(bid, [])
+            if not owned:
                 return null
 
-            # Collect the matched listing ids (the brokers' rows that fit) so the
-            # broker sees exactly what was matched.
-            from ..listings import service as ls
-            crit = dict(criteria or {})
-            crit["broker_owned_only"] = True
-            matched = ls.search_listings(criteria=crit, limit=30, conn=conn)
-            matched_ids = [l.id for l in matched]
-
-            inquiry_id = _inq.create_inquiry(
-                customer_post_agent_id,
-                criteria,
-                consult_session_id=consult_session_id,
-                thread_id=thread_id,
-                forum=forum,
-                matched_listing_ids=matched_ids,
-                conn=conn,
-            )
-            routed = _inq.route_inquiry(inquiry_id, broker_scores, conn=conn)
+            # Top brokers by how many of the shown listings they own. One inquiry
+            # per broker, carrying that broker's own relevant listings.
+            ranked = sorted(owned.items(), key=lambda kv: -len(kv[1]))[:_MAX_ROUTED_BROKERS]
+            routed_total = 0
+            first_inquiry = None
+            for bid, listing_ids in ranked:
+                inquiry_id = _inq.create_inquiry(
+                    customer_post_agent_id, criteria,
+                    consult_session_id=consult_session_id, thread_id=thread_id,
+                    forum=forum, matched_listing_ids=listing_ids, conn=conn,
+                )
+                routed_total += _inq.route_inquiry(
+                    inquiry_id, [(bid, len(listing_ids))], conn=conn
+                )
+                first_inquiry = first_inquiry or inquiry_id
 
             # A short system note so the customer (and forum readers) know the
             # inquiry was handed to brokers and an async reply is coming.
             try:
                 from ..auth import get_or_create_system_agent
                 system = get_or_create_system_agent(conn=conn)
-                note = (f"この条件に合う在庫を持つ仲介 {len(broker_scores)} 社にお繋ぎしました。"
+                note = (f"この条件に合う在庫を持つ仲介 {len(ranked)} 社にお繋ぎしました。"
                         "担当エージェントの返信をお待ちください。")
                 forum_core.reply(forum, thread_id, note, system.id,
                                  tags=["consult", "routed"], conn=conn)
@@ -346,9 +360,9 @@ def route_to_brokers(
                 pass
 
             return {
-                "routed": routed,
-                "broker_count": len(broker_scores),
-                "inquiry_id": inquiry_id,
+                "routed": routed_total,
+                "broker_count": len(ranked),
+                "inquiry_id": first_inquiry,
             }
         finally:
             if owns_conn:
