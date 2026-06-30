@@ -217,73 +217,6 @@ FALLBACK_MODERATION_REASON = (
 # Summarise template — called once results are in
 # ---------------------------------------------------------------------------
 
-# IMPORTANT: the summary step must NOT reuse SYSTEM_PROMPT — that one mandates
-# "必ず JSON で返してください", which leaks raw JSON into the natural-language
-# reply (and into the forum post). Give the summary its own plain-text persona.
-SUMMARY_SYSTEM_PROMPT = """\
-あなたは「FANGO 不動産アドバイザー」。オーナーの代理エージェントに対し、
-検索結果や次の一手を、自然な日本語の短い文章で伝えます。
-
-ルール:
-- JSON・コードブロック・マークダウンの表は使わない。普通の文章で答える。
-- 物件があれば、物件名・賃料または価格・駅徒歩・間取りに触れて 1〜3 件を簡潔に薦める。
-- 物件が 0 件なら、その旨を一言で伝え、条件を緩める提案（予算・エリア・徒歩分など）を
-  ひとつだけ添える。
-- 丁寧だが簡潔に。長文にしない。
-"""
-
-def render_summary_prompt(
-    criteria: dict,
-    listings: list[dict],
-    user_message: str,
-    last_assistant_message: str | None = None,
-    approximate: bool = False,
-    relax_note: str | None = None,
-) -> str:
-    """Build the user-turn input for the 'summarise top results' call.
-
-    Listings are passed in as compact dicts (see :func:`fango.listings.tools._listing_brief`).
-    When ``approximate`` is set, these are *near* matches found by loosening the
-    criteria (``relax_note`` says how) — the reply must make that clear.
-    """
-    import json as _json
-    result_header = (
-        f"近い条件の候補（上位 {len(listings)} 件）:" if approximate
-        else f"検索結果（上位 {len(listings)} 件）:"
-    )
-    lines = [
-        "オーナーの直近の発言:",
-        user_message.strip(),
-        "",
-        "現在までに整理された検索条件:",
-        _json.dumps(criteria, ensure_ascii=False, indent=2),
-        "",
-        result_header,
-        _json.dumps(listings, ensure_ascii=False, indent=2),
-        "",
-    ]
-    if approximate:
-        lines += [
-            "【重要】ご希望の条件に *完全一致* する物件はありませんでした。上記は条件を少し"
-            "緩めて見つかった **近い候補** です。",
-            (f"緩めた内容: {relax_note}" if relax_note else ""),
-            "まず「ご希望に完全一致する物件はありませんでしたが、近い条件で次の物件はいかがでしょう」"
-            "のように一言断ってから、提案してください。",
-        ]
-    lines += [
-        "上記のうち、オーナーに最も合いそうな 1〜3 件を選び、",
-        "なぜその物件を選んだかの理由を 1 件ごとに 1〜2 文で添えて、",
-        "日本語の自然な文章で短くまとめてください。",
-        "- 物件名と賃料または価格、駅徒歩、間取りに必ず触れる。",
-        "- マークダウンや表は使わない。普通の段落で。",
-        "- 最後に「気になる物件があれば listing_id を教えてください」と添える。",
-    ]
-    if last_assistant_message:
-        lines.insert(0, "（直前のあなたの返答:" + last_assistant_message[:200] + "…）")
-        lines.insert(1, "")
-    return "\n".join(lines)
-
-
 # ---------------------------------------------------------------------------
 # Fallback / degraded text
 # ---------------------------------------------------------------------------
@@ -291,8 +224,4 @@ def render_summary_prompt(
 FALLBACK_ASKBACK = (
     "システムが混雑しています。少し時間をおいて、もう一度ご希望の条件を教えてください "
     "（エリア・予算・間取りなど）。"
-)
-FALLBACK_SUMMARY = (
-    "申し訳ありません。検索結果の要約に失敗しました。"
-    "fango_search_listings を直接呼び出して結果を確認してください。"
 )

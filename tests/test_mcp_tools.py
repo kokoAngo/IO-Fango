@@ -49,6 +49,9 @@ def test_mcp_registers_all_tools(tmp_db):
         "chat_list_threads", "chat_get_thread", "chat_search",
         "dojo_list_threads", "dojo_get_thread", "dojo_search",
         "fango_consult", "fango_get_listing",
+        # Structured search re-enabled as the engine surface for a caller's own
+        # LLM (recommendation is the caller's job, not the server's).
+        "fango_search_listings",
     }
     assert expected <= names
     suspended = {
@@ -57,8 +60,6 @@ def test_mcp_registers_all_tools(tmp_db):
         "chat_post_joke", "chat_reply", "dojo_post_thread", "dojo_reply",
         "fango_attach_image", "fango_upload_image",
         "wiki_lookup", "wiki_catalog",
-        # Suspended to steer agents to fango_consult (SEARCH_LISTINGS_ENABLED).
-        "fango_search_listings",
     }
     assert not (suspended & names), suspended & names
 

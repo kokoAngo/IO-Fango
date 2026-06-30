@@ -64,11 +64,13 @@ def register(mcp) -> None:
             try:
                 from .. import forum_core
                 from ..auth import get_or_create_system_agent
+                from .. import moderation
                 p = proposals.get_proposal(proposal_id, conn=conn)
                 if p and p.get("thread_id") and p.get("agreement_type"):
                     forum = "baibai" if p["agreement_type"] == "sale" else "chintai"
                     note = (f"契約成立 ✅ ハッシュ {agreement.content_hash[:12]}… / "
                             f"状態 {agreement.status} / {explorer_url}")
+                    note = moderation.screen(note, use_llm=False).text
                     system = get_or_create_system_agent(conn=conn)
                     forum_core.reply(forum, p["thread_id"], note, system.id,
                                      tags=["agreement", "anchored"], conn=conn)

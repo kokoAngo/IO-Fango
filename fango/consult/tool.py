@@ -245,19 +245,19 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
                     log.warning("relaxed_search failed: %s", exc)
             briefs = [_listing_brief(r, conn=conn) for r in rows]
             _attach_external_links(briefs, conn)
-            last_assistant = _last_assistant_text(history_for_llm)
-            try:
-                summary = engine.summarise_results(
-                    merged, briefs, message, last_assistant=last_assistant,
-                    approximate=approximate, relax_note=relax_note,
+            # Gemini no longer writes the recommendation — that's the caller's LLM
+            # (it has `results`) or the broker agents (async, after routing). The
+            # reply is a concise templated acknowledgement; brokers/the caller do
+            # the actual recommending. Saves one Gemini call per ready turn.
+            if briefs:
+                reply = (
+                    "ご希望に完全一致する物件はありませんでしたが、条件を少し広げて近い候補をお出ししました。"
+                    "気になる物件があれば listing_id をお知らせください。"
+                    if approximate else
+                    "ご希望の条件に近い物件が見つかりました。気になる物件があれば listing_id をお知らせください。"
                 )
-                reply = summary.text
-                usage_in += summary.input_tokens
-                usage_out += summary.output_tokens
-            except Exception as exc:
-                log.warning("engine.summarise_results raised: %s", exc)
-                from . import prompts as _prompts
-                reply = _prompts.FALLBACK_SUMMARY
+            else:
+                reply = "現在の条件に合う物件が見つかりませんでした。エリアや予算を少し広げてみてください。"
             results_payload = {"total": total, "items": briefs, "approximate": approximate}
             if relax_note:
                 results_payload["relax_note"] = relax_note

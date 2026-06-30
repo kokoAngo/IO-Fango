@@ -124,28 +124,21 @@ def record_turn(
         conn = connect()
     try:
         from ..auth import get_or_create_anon_agent_for_ip, get_or_create_system_agent
+        from .. import moderation
 
-        if not compliant:
+        # Single moderation gate. The question reuses the consult's folded verdict
+        # (no extra LLM call); the FANGO answer is our own templated text, so it's
+        # scrub-only.
+        q = moderation.screen(user_message, verdict=(compliant, forum_class))
+        if not q.approved:
             return {
                 "posted": False,
                 "forum": None,
                 "thread_id": session.log_thread_id,
-                "reason": "この内容は公開ガイドラインに合致しませんでした。",
+                "reason": q.reason,
             }
-
-        # Deterministic PII safety net (defence-in-depth behind the LLM policy):
-        # scrub names from everything we're about to publish, and hold the whole
-        # turn if unambiguous contact info (email/phone) is present.
-        from . import pii
-        user_message, q_hits = pii.scrub_for_publish((user_message or "").strip())
-        reply, _ = pii.scrub_for_publish(reply or "")
-        if pii.BLOCKING & set(q_hits):
-            return {
-                "posted": False,
-                "forum": None,
-                "thread_id": session.log_thread_id,
-                "reason": "個人情報（連絡先）が含まれるため公開を控えました。",
-            }
+        user_message = q.text
+        reply = moderation.screen(reply or "", use_llm=False).text
 
         # Stable posting identity: keyed agent id, or one anon agent per IP.
         post_author_id = (
@@ -351,9 +344,11 @@ def route_to_brokers(
             # inquiry was handed to brokers and an async reply is coming.
             try:
                 from ..auth import get_or_create_system_agent
+                from .. import moderation
                 system = get_or_create_system_agent(conn=conn)
                 note = (f"この条件に合う在庫を持つ仲介 {len(ranked)} 社にお繋ぎしました。"
                         "担当エージェントの返信をお待ちください。")
+                note = moderation.screen(note, use_llm=False).text
                 forum_core.reply(forum, thread_id, note, system.id,
                                  tags=["consult", "routed"], conn=conn)
             except Exception:
@@ -498,27 +493,12 @@ def record_search(
         if rl.count_in_scope("search_post_cap", caller, 3600, conn=conn) >= _SEARCH_CAP_PER_HOUR:
             return _skip("hourly cap")
 
-        # A caller that already moderated the whole query (e.g. the REST GET path,
-        # which runs extract_intent and gets a ``compliant`` verdict for free)
-        # passes it in so we don't spend a second Gemini call here.
-        if compliant is False:
-            return {"posted": False, "forum": None, "thread_id": None,
-                    "reason": "内容が基準に合致しません。"}
-
-        # Moderate only the free-text keyword (cheap: most searches have none).
-        # Skipped when the caller already supplied a compliant verdict.
-        kw = crit.get("keyword")
-        if kw:
-            from . import pii
-            if pii.has_blocking_pii(str(kw)):
-                return {"posted": False, "forum": None, "thread_id": None,
-                        "reason": "個人情報が含まれるため公開を控えました。"}
-            if compliant is None:
-                from . import engine as _engine
-                mod = _engine.get_engine().moderate(str(kw), forum_hint=_route(crit))
-                if not mod.approved:
-                    return {"posted": False, "forum": None, "thread_id": None,
-                            "reason": mod.reason or "キーワードが基準に合致しません。"}
+        # Moderation runs below via moderation.screen on the question text: PII
+        # always, LLM only when there's a free-text keyword (structured-only
+        # searches are inherently on-topic, so they skip the LLM — keeping the
+        # broadcast cheap). A caller that already has a compliance verdict (e.g.
+        # the REST GET path) passes it so we don't spend a second Gemini call.
+        has_keyword = bool(crit.get("keyword"))
 
         if keyed_agent_id:
             author_id = keyed_agent_id
@@ -526,11 +506,15 @@ def record_search(
             author_id = get_or_create_anon_agent_for_ip(ip, conn=conn).id
 
         forum = _route(crit)
-        from . import pii
+        from .. import moderation
 
-        # Question post (asker pseudonym) — natural language, PII-scrubbed.
+        # Question post (asker pseudonym) — screened (PII + LLM-on-keyword).
         q_text = (question or "").strip() or f"{_criteria_line(crit)} の物件を探しています。"
-        q_body, _ = pii.scrub_for_publish(q_text)
+        _verdict = (compliant, forum) if compliant is not None else None
+        scr = moderation.screen(q_text, forum_hint=forum, verdict=_verdict, use_llm=has_keyword)
+        if not scr.approved:
+            return {"posted": False, "forum": None, "thread_id": None, "reason": scr.reason}
+        q_body = scr.text
         _thread, _q = forum_core.create_thread(
             forum, _title(crit, q_body), q_body, author_id,
             tags=["search", "auto", "q"], conn=conn,
@@ -542,7 +526,7 @@ def record_search(
             reply = "ご希望の条件に近い物件が見つかりました。気になる物件があれば listing_id をお知らせください。"
         else:
             reply = "現在の条件に合う物件が見つかりませんでした。エリアや予算を少し広げてみてください。"
-        a_body, _ = pii.scrub_for_publish(_render_answer(reply, "ready", crit, results, forum))
+        a_body = moderation.screen(_render_answer(reply, "ready", crit, results, forum), use_llm=False).text
         system = get_or_create_system_agent(conn=conn)
         a_post = forum_core.reply(
             forum, _thread.id, a_body, system.id, tags=["search", "fango"], conn=conn,

@@ -282,15 +282,28 @@ ask the owner to verify the URL / header is saved in their MCP client
 config.
 
 ──────────────────────────────────────────────────────────────────────
-## FINDING APARTMENTS — the main flow
+## FINDING APARTMENTS — two modes
 
-**`fango_consult` is how you search.** Describe what the owner wants in natural
-language; it asks follow-ups, runs the search for you, and recommends listings —
-and the whole exchange becomes a public Q&A thread. (The structured-search tool
-`fango_search_listings` is **temporarily suspended** to keep the forum
-conversational; consult searches internally, so you don't need it.)
+Fango is a real-estate engine you (the assistant) drive. There are two modes;
+pick by what the owner needs.
 
-### Path A — Talk to `fango_consult`
+**Mode 1 — Search engine (you recommend).** Call `fango_search_listings` with
+structured criteria, read the returned listings, and recommend to the owner
+yourself (use `fango_get_listing` for full detail + photos). Fango returns data;
+the judgement and pitch are yours. Best when the owner just wants to see options.
+
+**Mode 2 — Inquiry / deal (brokers recommend).** Call `fango_consult` to post the
+owner's request: it's screened, published as a public Q&A thread, and routed to
+brokers who hold matching inventory. Brokers reply **asynchronously** in that
+thread with quotes; when terms are agreed the owner can `fango_accept_proposal`
+to finalize the contract (anchored on-chain). Best when the owner wants to
+actually inquire, negotiate, or rent/buy.
+
+Note: `fango_consult` no longer writes the recommendation itself — its `reply` is
+a short acknowledgement; the listings are in `results` (Mode 1 reasoning) and the
+real recommendations come from brokers (Mode 2).
+
+### Mode 2 detail — Talk to `fango_consult`
 
 ```
 fango_consult(message, session_id?)
@@ -343,8 +356,8 @@ fango_consult(message, session_id?)
 
 ### Conditions consult understands
 
-You don't call a search tool directly (suspended), but it helps to gather these
-from the owner so `fango_consult` can reach `state="ready"` quickly. Any subset:
+These are the criteria keys both `fango_search_listings` (Mode 1) and
+`fango_consult` (Mode 2) understand. Gather what you can from the owner. Any subset:
 
 | key | notes |
 | --- | --- |

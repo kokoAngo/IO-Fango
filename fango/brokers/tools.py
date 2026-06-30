@@ -170,8 +170,7 @@ def register(mcp) -> None:
                         maintenance_fee_yen, contract_months (+ optional move_in_date)
                 sale:   price_yen, deposit_yen (+ optional closing_date).
         """
-        from .. import forum_core
-        from ..consult import pii
+        from .. import forum_core, moderation
         from ..db import connect
         from . import proposals
 
@@ -185,13 +184,14 @@ def register(mcp) -> None:
             except proposals.ProposalError as exc:
                 return {"ok": False, "error": str(exc)}
             # Post the proposed terms into the inquiry thread (so the customer sees
-            # them and can reference the proposal_id when accepting).
+            # them and can reference the proposal_id when accepting). The body is a
+            # numeric template — scrub only (no LLM needed).
             if res.get("thread_id") and res.get("forum"):
                 lines = [f"【条件提示 #{res['proposal_id']}】{agreement_type}"]
                 for k, v in (terms or {}).items():
                     lines.append(f"・{k}: {v}")
                 lines.append(f"受諾するには fango_accept_proposal({res['proposal_id']}) を呼んでください。")
-                body, _ = pii.scrub_for_publish("\n".join(lines))
+                body = moderation.screen("\n".join(lines), use_llm=False).text
                 try:
                     forum_core.reply(res["forum"], res["thread_id"], body, agent.id,
                                      tags=["broker", "proposal"], conn=conn)
@@ -212,8 +212,7 @@ def register(mcp) -> None:
             listing_ids: Listings to attach (default: the inquiry's matched set).
                 Each must be yours and advertisable, or it's skipped.
         """
-        from .. import forum_core
-        from ..consult import pii
+        from .. import forum_core, moderation
         from ..db import connect
 
         agent = broker_auth()
@@ -225,11 +224,14 @@ def register(mcp) -> None:
             if not inq.get("thread_id") or not inq.get("forum"):
                 return {"posted": False, "error": "inquiry has no thread to reply into"}
 
-            body, hits = pii.scrub_for_publish((message or "").strip())
-            if not body:
+            # Broker text is untrusted/external — full moderation gate (PII + LLM
+            # compliance), same screen every published post goes through.
+            if not (message or "").strip():
                 return {"posted": False, "error": "empty message"}
-            if pii.BLOCKING & set(hits):
-                return {"posted": False, "error": "message blocked for personal info (PII)"}
+            scr = moderation.screen(message, forum_hint=inq["forum"], conn=conn)
+            if not scr.approved:
+                return {"posted": False, "error": scr.reason}
+            body = scr.text
 
             post = forum_core.reply(
                 inq["forum"], inq["thread_id"], body, agent.id,

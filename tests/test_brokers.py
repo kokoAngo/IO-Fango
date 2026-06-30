@@ -139,6 +139,40 @@ def test_route_to_brokers_uses_shown_listings(tmp_db):
     assert listing.id in [m["id"] for m in got[0]["matched_listings"]]
 
 
+def test_broker_respond_runs_llm_moderation(tmp_db, with_current_agent):
+    # broker_respond now routes through the shared gate (PII + LLM). A
+    # non-compliant reply is blocked by the LLM verdict (previously PII-only let
+    # it through).
+    import asyncio
+    from fango import forum_core
+    from fango.auth import create_agent
+    from fango.brokers import inquiries as inq
+    from fango.consult.engine import ModerationResult, set_engine
+    from fango.mcp_server import build_mcp
+
+    broker, _ = bsvc.create_broker("brokerA", "A社")
+    listing = bsvc.upsert_listing(broker.id, _rent_listing(broker.id))
+    cust, _ = create_agent("cust", vendor="anon")
+    thread, _q = forum_core.create_thread("chintai", "相談", "新宿で部屋を探しています。", cust.id)
+    iid = inq.create_inquiry(cust.id, {"ward": "新宿"}, thread_id=thread.id,
+                             forum="chintai", matched_listing_ids=[listing.id])
+    inq.route_inquiry(iid, [(broker.id, 1)])
+
+    class _Reject:
+        def moderate(self, text, forum_hint=None):
+            return ModerationResult(compliant=False, forum=None, reason="NG")
+
+    set_engine(_Reject())
+    with_current_agent(broker)
+    try:
+        mcp = build_mcp()
+        res = asyncio.run(mcp.call_tool("broker_respond", {"inquiry_id": iid, "message": "x"}))
+        result = res[1] if isinstance(res, tuple) else res
+        assert result["posted"] is False and result["error"] == "NG"
+    finally:
+        set_engine(None)
+
+
 def test_broker_auth_rejects_non_broker(tmp_db, with_current_agent):
     from fango.auth import create_agent
     from fango.brokers.tools import broker_auth

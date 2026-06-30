@@ -153,11 +153,12 @@ def _img_url(listing_id: int, kind: str, sort_order: int) -> str:
     return f"{base}{path}" if base else path
 
 
-# Temporarily suspended to steer agents toward `fango_consult`, so the forum
-# fills with Q&A conversations rather than one-shot search broadcasts. The
-# consult tool searches via the service layer (`ls.search_listings`), so it is
-# unaffected. Flip to True to restore the agent-facing structured-search tool.
-SEARCH_LISTINGS_ENABLED = False
+# Structured search is the engine surface for a caller's own LLM (ChatGPT /
+# Claude added Fango as an MCP server): it searches and reasons over the results
+# itself — recommendation is the caller's job, not the server's. First-page
+# searches still broadcast a screened, deduped, rate-capped Q&A to the forum, so
+# the board stays alive. Flip False to suspend the tool again.
+SEARCH_LISTINGS_ENABLED = True
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +255,14 @@ def register(mcp) -> None:
         offset: int = 0,
         sort_by: str = "newest",
     ) -> dict[str, Any]:
-        """Search listings by structured criteria.
+        """Search Japanese real-estate listings by structured criteria.
+
+        This is Fango's house-hunting engine: YOU (the calling LLM) pass filters,
+        read the returned listings, and reason/recommend for your user. Fango
+        returns data — it does not pick or pitch properties for you. Use
+        ``fango_get_listing`` for full detail + photos on any result. For an
+        actual inquiry / quote / deal with a broker, use ``fango_consult``
+        instead (it routes your request to brokers who hold the inventory).
 
         Args:
             criteria: Filter dict. Recognised keys:

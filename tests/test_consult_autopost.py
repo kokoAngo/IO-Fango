@@ -46,7 +46,9 @@ def test_rental_consult_creates_chintai_qa(tmp_db, install_engine):
     # A: FANGO's reply + search artifacts, authored by the FANGO narrator,
     #    with the top listing attached.
     assert a.author_id == system.id
-    assert "代々木上原の1LDKをおすすめします。" in a.body
+    # FANGO's answer is now a templated ack (no Gemini recommendation prose) +
+    # search artifacts; the top listing is still attached.
+    assert "listing_id" in a.body
     assert "条件:" in a.body and "1LDK" in a.body
     assert a.listing_refs and not q.listing_refs
 
@@ -248,7 +250,6 @@ def test_no_exact_match_falls_back_to_near_options(tmp_db, install_engine):
     assert out["state"] == "ready"
     assert out["results"]["approximate"] is True
     assert len(out["results"]["items"]) >= 1
-    assert fake.last_summary_approximate is True
     # The posted answer flags it as a near match, not an exact hit.
     sess = _session(out["session_id"])
     body = forum_core.get_thread(sess.log_forum, sess.log_thread_id)["posts"][-1].body

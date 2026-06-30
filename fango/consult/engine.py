@@ -3,9 +3,11 @@
 Two callables are exposed:
 
 * :func:`extract_intent` — given history + current user message, returns the
-  JSON intent dict (state / criteria_delta / missing / ask_back).
-* :func:`summarise_results` — given criteria + search results + user message,
-  returns a natural-language reply string.
+  JSON intent dict (state / criteria_delta / missing / ask_back) plus a folded-in
+  moderation verdict (compliant / forum).
+* :func:`moderate` — standalone compliance verdict for a candidate post (used by
+  the shared :mod:`fango.moderation` gate). Recommendation/summarisation is no
+  longer done server-side — the caller's own LLM or broker agents recommend.
 
 Both honour the module-level ``_engine`` singleton; tests should call
 :func:`set_engine` with a fake before exercising the consult tool.
@@ -54,13 +56,6 @@ class IntentResult:
     output_tokens: int = 0
 
 
-@dataclass
-class SummaryResult:
-    text: str
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-
 _FORUMS = ("baibai", "chintai", "chat", "dojo")
 
 
@@ -92,16 +87,6 @@ class Engine(Protocol):
         history: list[ConsultMessage],
         user_message: str,
     ) -> IntentResult: ...
-
-    def summarise_results(
-        self,
-        criteria: dict[str, Any],
-        listings: list[dict[str, Any]],
-        user_message: str,
-        last_assistant: str | None = None,
-        approximate: bool = False,
-        relax_note: str | None = None,
-    ) -> SummaryResult: ...
 
     def moderate(
         self,
@@ -173,41 +158,6 @@ class GeminiEngine:
             return _degraded_extract(user_message)
         return _parse_intent(text, usage)
 
-    def summarise_results(
-        self,
-        criteria: dict[str, Any],
-        listings: list[dict[str, Any]],
-        user_message: str,
-        last_assistant: str | None = None,
-        approximate: bool = False,
-        relax_note: str | None = None,
-    ) -> SummaryResult:
-        if self._degraded:
-            return SummaryResult(text=_degraded_summary(listings, approximate, relax_note))
-        prompt = prompts.render_summary_prompt(
-            criteria, listings, user_message, last_assistant_message=last_assistant,
-            approximate=approximate, relax_note=relax_note,
-        )
-        try:
-            from google.genai import types  # type: ignore
-            response = self._client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=prompts.SUMMARY_SYSTEM_PROMPT,
-                    temperature=0.4,
-                ),
-            )
-            text = (response.text or "").strip()
-            usage = response.usage_metadata
-        except Exception as exc:
-            log.warning("summarise_results LLM call failed: %s", exc)
-            return SummaryResult(text=_degraded_summary(listings))
-        return SummaryResult(
-            text=text or _degraded_summary(listings),
-            input_tokens=_get_usage(usage, "prompt_token_count"),
-            output_tokens=_get_usage(usage, "candidates_token_count"),
-        )
 
     def moderate(
         self,
@@ -431,24 +381,6 @@ def _degraded_extract(user_message: str) -> IntentResult:
     )
 
 
-def _degraded_summary(listings: list[dict[str, Any]], approximate: bool = False,
-                      relax_note: str | None = None) -> str:
-    if not listings:
-        return prompts.FALLBACK_SUMMARY + "（該当物件が見つかりませんでした）"
-    if approximate:
-        head = "ご希望に完全一致する物件はありませんでしたが、近い条件で以下が見つかりました:"
-        parts = [head] + ([relax_note] if relax_note else [])
-    else:
-        parts = ["以下の物件が条件に合いそうです:"]
-    for L in listings[:3]:
-        rent = L.get("rent_yen")
-        rent_str = f"月額 {rent:,} 円" if rent else "賃料未公開"
-        parts.append(
-            f"・[id={L.get('id')}] {L.get('building_name') or L.get('title') or '物件'}"
-            f" — {L.get('layout') or '間取り不明'} / {L.get('area_sqm') or '?'} ㎡ / {rent_str}"
-        )
-    parts.append("気になる物件があれば listing_id を教えてください。")
-    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

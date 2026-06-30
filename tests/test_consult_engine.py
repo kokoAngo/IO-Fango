@@ -141,10 +141,12 @@ def test_ready_state_runs_search_and_calls_summary(tmp_db, install_engine):
     install_engine(fake)
     out = _run_turn("ピアノ弾ける1LDK 20万以下 東京", session_id=None)
     assert out["state"] == "ready"
-    assert out["reply"] == "代々木上原の1LDKをおすすめします。"
+    # Reply is a templated ack now (Gemini no longer writes recommendations);
+    # the caller's LLM / brokers recommend from `results`.
+    assert "listing_id" in out["reply"]
     assert out["results"] is not None
     assert out["results"]["total"] >= 1
-    assert fake.summary_calls == 1
+    assert fake.summary_calls == 0   # summarise_results is no longer called
 
 
 def test_max_turns_caps_session(tmp_db, install_engine, monkeypatch):
