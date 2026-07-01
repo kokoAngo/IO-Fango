@@ -224,11 +224,15 @@ def register(mcp) -> None:
             if not inq.get("thread_id") or not inq.get("forum"):
                 return {"posted": False, "error": "inquiry has no thread to reply into"}
 
-            # Broker text is untrusted/external — full moderation gate (PII + LLM
-            # compliance), same screen every published post goes through.
+            # Brokers are an authenticated, vetted commercial tier — quotes,
+            # availability, and 内見 offers ARE their job, so they must NOT be run
+            # through the general anti-solicitation LLM moderator (it rejects
+            # exactly that legitimate content). PII scrub only: don't leak contact
+            # info. (A broker-specific policy that still blocks illegal /
+            # discriminatory content could be layered on later.)
             if not (message or "").strip():
                 return {"posted": False, "error": "empty message"}
-            scr = moderation.screen(message, forum_hint=inq["forum"], conn=conn)
+            scr = moderation.screen(message, use_llm=False, conn=conn)
             if not scr.approved:
                 return {"posted": False, "error": scr.reason}
             body = scr.text

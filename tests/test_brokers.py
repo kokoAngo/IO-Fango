@@ -139,15 +139,15 @@ def test_route_to_brokers_uses_shown_listings(tmp_db):
     assert listing.id in [m["id"] for m in got[0]["matched_listings"]]
 
 
-def test_broker_respond_runs_llm_moderation(tmp_db, with_current_agent):
-    # broker_respond now routes through the shared gate (PII + LLM). A
-    # non-compliant reply is blocked by the LLM verdict (previously PII-only let
-    # it through).
+def test_broker_respond_scrubs_pii_but_allows_quotes(tmp_db, with_current_agent):
+    # Broker replies are a vetted commercial tier: legitimate quotes / 内見 offers
+    # must go through (NOT the anti-solicitation LLM moderator), while contact-info
+    # PII is still blocked. No engine is installed → if broker_respond called the
+    # LLM moderator it would fail closed; a passing quote proves it doesn't.
     import asyncio
     from fango import forum_core
     from fango.auth import create_agent
     from fango.brokers import inquiries as inq
-    from fango.consult.engine import ModerationResult, set_engine
     from fango.mcp_server import build_mcp
 
     broker, _ = bsvc.create_broker("brokerA", "A社")
@@ -157,20 +157,19 @@ def test_broker_respond_runs_llm_moderation(tmp_db, with_current_agent):
     iid = inq.create_inquiry(cust.id, {"ward": "新宿"}, thread_id=thread.id,
                              forum="chintai", matched_listing_ids=[listing.id])
     inq.route_inquiry(iid, [(broker.id, 1)])
-
-    class _Reject:
-        def moderate(self, text, forum_hint=None):
-            return ModerationResult(compliant=False, forum=None, reason="NG")
-
-    set_engine(_Reject())
     with_current_agent(broker)
-    try:
-        mcp = build_mcp()
-        res = asyncio.run(mcp.call_tool("broker_respond", {"inquiry_id": iid, "message": "x"}))
-        result = res[1] if isinstance(res, tuple) else res
-        assert result["posted"] is False and result["error"] == "NG"
-    finally:
-        set_engine(None)
+    mcp = build_mcp()
+
+    def _respond(msg):
+        res = asyncio.run(mcp.call_tool("broker_respond", {"inquiry_id": iid, "message": msg}))
+        return res[1] if isinstance(res, tuple) else res
+
+    # A legitimate quote / viewing offer is published (no LLM anti-solicitation gate).
+    ok = _respond("内見可能です。初期費用の目安もお出しできます。")
+    assert ok["posted"] is True
+    # Contact info (email) is still blocked by the PII layer.
+    blocked = _respond("直接ご連絡ください broker@example.com")
+    assert blocked["posted"] is False
 
 
 def test_broker_auth_rejects_non_broker(tmp_db, with_current_agent):
