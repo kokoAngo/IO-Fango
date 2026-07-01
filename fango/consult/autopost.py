@@ -307,7 +307,9 @@ def route_to_brokers(
             # (dropped a bad keyword, widened budget), so re-matching brokers on
             # the raw criteria would miss them. Fall back to a criteria-based
             # inventory match only when none of the shown listings are broker-owned.
+            from ..listings import service as ls
             owned: dict[int, list[int]] = {}
+            # (1) inventory-based: brokers who own the listings shown to the customer.
             ids = [int(i) for i in (result_listing_ids or []) if i is not None]
             if ids:
                 ph = ",".join("?" * len(ids))
@@ -316,6 +318,15 @@ def route_to_brokers(
                     f"WHERE id IN ({ph}) AND broker_agent_id IS NOT NULL", ids
                 ).fetchall():
                     owned.setdefault(r["broker_agent_id"], []).append(r["id"])
+            # (2) area-based (union): brokers whose declared areas cover the query's
+            # ward/city — even without a shown listing. Attach each such broker's own
+            # matching inventory so it has concrete options to quote.
+            for bid in _inq.match_brokers_by_area(criteria, limit=_MAX_ROUTED_BROKERS, conn=conn):
+                if bid not in owned:
+                    own_rows = ls.search_listings(
+                        criteria={**criteria, "broker_agent_id": bid}, limit=5, conn=conn)
+                    owned[bid] = [l.id for l in own_rows]
+            # (3) fallback: criteria inventory match if still nobody.
             if not owned:
                 for bid, _score in _inq.match_brokers_for(
                     criteria, limit=_MAX_ROUTED_BROKERS, conn=conn

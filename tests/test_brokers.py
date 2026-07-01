@@ -172,6 +172,35 @@ def test_broker_respond_scrubs_pii_but_allows_quotes(tmp_db, with_current_agent)
     assert blocked["posted"] is False
 
 
+def test_route_to_brokers_by_area(tmp_db):
+    # A broker that declares it covers 新宿 gets a 新宿 inquiry even when none of
+    # the shown listings are its own (area-based routing, union with inventory).
+    from fango import forum_core
+    from fango.auth import create_agent
+    from fango.consult import autopost
+
+    a, _ = bsvc.create_broker("brokerA", "新宿不動産", areas=["新宿", "渋谷"])
+    a_listing = bsvc.upsert_listing(a.id, _rent_listing(a.id, ward="新宿区"))
+    # A shown listing owned by NOBODY (house pool) — inventory routing alone
+    # would find no broker.
+    house = ls.insert_listing({"building_name": "家主直", "prefecture": "東京都",
+                               "ward": "新宿区", "rent_yen": 150000, "ad_status": "可"})
+    cust, _ = create_agent("cust", vendor="anon")
+    thread, _q = forum_core.create_thread("chintai", "相談", "新宿で部屋を探しています。", cust.id)
+
+    routing = autopost.route_to_brokers(
+        thread_id=thread.id, forum="chintai",
+        criteria={"prefecture": "東京都", "ward": "新宿区"},
+        customer_post_agent_id=cust.id,
+        result_listing_ids=[house.id],   # shown listing is NOT broker A's
+    )
+    assert routing["broker_count"] == 1 and routing["routed"] == 1
+    # The area-matched broker's inquiry carries ITS OWN matching listing.
+    got = inq.fetch_new_inquiries(a.id)
+    assert len(got) == 1
+    assert a_listing.id in [m["id"] for m in got[0]["matched_listings"]]
+
+
 def test_broker_auth_rejects_non_broker(tmp_db, with_current_agent):
     from fango.auth import create_agent
     from fango.brokers.tools import broker_auth

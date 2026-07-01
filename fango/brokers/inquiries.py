@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from typing import Any
 
@@ -18,10 +19,54 @@ from ..db import connect, transaction
 
 log = logging.getLogger(__name__)
 
+# Strip the Japanese admin suffix so 新宿区 (query) matches 新宿 (broker area).
+_ADMIN_SUFFIX = re.compile(r"[都道府県区市町村]+$")
+
+
+def _area_core(s: Any) -> str:
+    return _ADMIN_SUFFIX.sub("", str(s or "").strip())
+
 
 # ---------------------------------------------------------------------------
 # Matching
 # ---------------------------------------------------------------------------
+
+def match_brokers_by_area(
+    criteria: dict[str, Any],
+    limit: int = 3,
+    conn: sqlite3.Connection | None = None,
+) -> list[int]:
+    """Brokers whose declared service areas cover the query's ward/city.
+
+    Area-based routing: a broker that covers 新宿 gets 新宿 inquiries even when its
+    specific listings weren't in the shown results. Matches on the ward/city core
+    (新宿区 → 新宿), ignoring the admin suffix, against each broker's ``areas``.
+    Prefecture alone is too broad to route on, so it is not used.
+    """
+    cores = {_area_core(criteria.get(k)) for k in ("ward", "city")}
+    cores = {c for c in cores if c}
+    if not cores:
+        return []
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        out: list[int] = []
+        for r in conn.execute(
+            "SELECT agent_id, areas_json FROM brokers WHERE active = 1"
+        ).fetchall():
+            try:
+                areas = json.loads(r["areas_json"] or "[]")
+            except (ValueError, TypeError):
+                areas = []
+            if cores & {_area_core(a) for a in areas}:
+                out.append(r["agent_id"])
+            if len(out) >= limit:
+                break
+        return out
+    finally:
+        if owns_conn:
+            conn.close()
 
 def match_brokers_for(
     criteria: dict[str, Any],
