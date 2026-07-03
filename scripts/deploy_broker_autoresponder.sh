@@ -22,6 +22,10 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INTERVAL="${INTERVAL:-120}"
 UNIT_PATH="/etc/systemd/system/fango-broker.service"
 ENV_FILE="$REPO_DIR/broker.env"
+# PROPOSE=1 → the broker auto-proposes terms (customers can accept + anchor).
+# Otherwise it only posts a reply.
+PROPOSE_FLAG=""
+[ "${PROPOSE:-0}" = "1" ] && PROPOSE_FLAG=" --propose"
 
 echo "==> Fango broker autoresponder deploy"
 echo "    repo: $REPO_DIR"
@@ -66,6 +70,7 @@ echo "    python: $PYTHON"
 echo "    user:   $SVC_USER"
 echo "    url:    $MCP_URL"
 echo "    poll:   every ${INTERVAL}s"
+echo "    mode:   $([ -n "$PROPOSE_FLAG" ] && echo 'propose terms (customers can accept + anchor)' || echo 'reply only')"
 
 # --- broker key ------------------------------------------------------------
 if [ -n "${FANGO_BROKER_KEY:-}" ]; then
@@ -77,7 +82,7 @@ fi
 
 # --- preflight: validate the key with a non-destructive dry-run ------------
 echo "==> Preflight dry-run (no posts)..."
-if ! FANGO_BROKER_KEY="$KEY" FANGO_MCP_URL="$MCP_URL" "$PYTHON" -m scripts.broker_autoresponder --once --dry-run; then
+if ! FANGO_BROKER_KEY="$KEY" FANGO_MCP_URL="$MCP_URL" "$PYTHON" -m scripts.broker_autoresponder --once --dry-run$PROPOSE_FLAG; then
   echo "error: dry-run failed — check the key / URL. Service NOT installed." >&2
   exit 1
 fi
@@ -104,7 +109,7 @@ Type=simple
 User=$SVC_USER
 WorkingDirectory=$REPO_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$PYTHON -m scripts.broker_autoresponder --interval $INTERVAL
+ExecStart=$PYTHON -m scripts.broker_autoresponder --interval $INTERVAL$PROPOSE_FLAG
 Restart=always
 RestartSec=10
 

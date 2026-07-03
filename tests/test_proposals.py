@@ -72,6 +72,49 @@ def test_create_proposal_validates_ownership_and_terms(tmp_db):
         proposals.create_proposal(other.id, iid, listing.id, "rental", _RENT_TERMS)
 
 
+def test_list_for_customer_then_accept(tmp_db, fake_chain):
+    # The customer-side discovery path the agent cluster uses: list pending
+    # proposals → accept by id → agreement anchored → it drops off the list.
+    broker, listing, customer, iid = _setup_inquiry(tmp_db)
+    res = proposals.create_proposal(broker.id, iid, listing.id, "rental", _RENT_TERMS)
+
+    pending = proposals.list_for_customer(customer.id)
+    assert len(pending) == 1
+    p = pending[0]
+    assert p["proposal_id"] == res["proposal_id"]
+    assert p["agreement_type"] == "rental"
+    assert p["terms"]["monthly_rent_yen"] == _RENT_TERMS["monthly_rent_yen"]
+    assert p["broker_company"] == "新宿不動産"
+
+    out = proposals.accept_proposal(p["proposal_id"], customer.id)
+    assert out["agreement"].status == "anchored"
+    # Accepted → no longer pending; another customer sees nothing.
+    assert proposals.list_for_customer(customer.id) == []
+    other, _ = create_agent("other", vendor="anon")
+    assert proposals.list_for_customer(other.id) == []
+
+
+def test_derive_terms_matches_canonical_schema(tmp_db):
+    # The autoresponder's auto-derived terms must satisfy create_proposal's schema.
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "broker_autoresponder",
+        Path(__file__).resolve().parent.parent / "scripts" / "broker_autoresponder.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    broker, listing, customer, iid = _setup_inquiry(tmp_db)
+    atype, terms = mod.derive_terms({"rent_yen": 150000})
+    assert atype == "rental"
+    # Feeds cleanly into a real proposal (would raise ProposalError on bad terms).
+    res = proposals.create_proposal(broker.id, iid, listing.id, atype, terms)
+    assert res["proposal_id"]
+    # Sale derivation too.
+    assert mod.derive_terms({"price_man": 5000})[0] == "sale"
+    assert mod.derive_terms({})[0] is None
+
+
 def test_accept_creates_and_anchors_agreement(tmp_db, fake_chain):
     broker, listing, customer, iid = _setup_inquiry(tmp_db)
     res = proposals.create_proposal(broker.id, iid, listing.id, "rental", _RENT_TERMS)

@@ -111,6 +111,58 @@ def get_proposal(proposal_id: int, conn: sqlite3.Connection | None = None) -> di
             conn.close()
 
 
+def list_for_customer(
+    customer_agent_id: int,
+    status: str = "proposed",
+    limit: int = 50,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict[str, Any]]:
+    """Proposals addressed to this customer (default: still awaiting acceptance).
+
+    The customer-facing counterpart of the broker's inquiry mailbox: a keyed
+    agent (or a keyless consult caller) lists proposals it can act on and passes
+    ``proposal_id`` straight to :func:`accept_proposal` — no thread scraping.
+    """
+    from . import service as bsvc
+    from ..listings import service as ls
+
+    owns_conn = conn is None
+    if conn is None:
+        conn = connect()
+    try:
+        sql = ("SELECT id AS proposal_id, inquiry_id, broker_agent_id, listing_id, "
+               "agreement_type, terms_json, thread_id, status, created_at "
+               "FROM broker_proposals WHERE customer_agent_id = ?")
+        params: list[Any] = [customer_agent_id]
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        out: list[dict[str, Any]] = []
+        for r in conn.execute(sql, params).fetchall():
+            try:
+                terms = json.loads(r["terms_json"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                terms = {}
+            listing = ls.get_listing(r["listing_id"], conn=conn)
+            broker = bsvc.get_broker(r["broker_agent_id"], conn=conn)
+            out.append({
+                "proposal_id": r["proposal_id"],
+                "status": r["status"],
+                "agreement_type": r["agreement_type"],
+                "terms": terms,
+                "thread_id": r["thread_id"],
+                "listing_id": r["listing_id"],
+                "building_name": listing.building_name if listing else None,
+                "broker_company": broker["company"] if broker else None,
+            })
+        return out
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 def accept_proposal(
     proposal_id: int,
     customer_agent_id: int,

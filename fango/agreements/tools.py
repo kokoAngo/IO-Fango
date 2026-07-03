@@ -87,3 +87,35 @@ def register(mcp) -> None:
             }
         finally:
             conn.close()
+
+    @mcp.tool()
+    def fango_list_proposals(session_id: str | None = None) -> dict[str, Any]:
+        """List broker term proposals awaiting your acceptance.
+
+        Your inbox for deals: each entry has a ``proposal_id`` you can pass
+        straight to ``fango_accept_proposal`` (no need to scrape the thread), plus
+        the terms, listing, and broker. Only proposals addressed to you and still
+        open are returned.
+
+        Args:
+            session_id: REQUIRED for keyless callers — the ``session_id`` from your
+                ``fango_consult`` conversation. Keyed agents may omit it.
+        """
+        from ..brokers import proposals
+        from ..consult import session as _ss
+
+        conn = connect()
+        try:
+            agent = resolve_agent(conn=conn)
+            customer_agent_id = agent.id if agent is not None else None
+            if customer_agent_id is None:
+                if not session_id:
+                    return {"ok": False, "error": "session_id required for keyless callers"}
+                sess = _ss.get_session(session_id, conn=conn)
+                if sess is None or sess.post_agent_id is None:
+                    return {"ok": False, "error": "unknown or empty session"}
+                customer_agent_id = sess.post_agent_id
+            items = proposals.list_for_customer(customer_agent_id, status="proposed", conn=conn)
+            return {"ok": True, "proposals": items}
+        finally:
+            conn.close()

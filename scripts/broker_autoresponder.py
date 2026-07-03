@@ -85,6 +85,30 @@ def _access(m: dict) -> str:
     return st or ""
 
 
+def derive_terms(m: dict):
+    """Derive a canonical term set from a matched listing brief.
+
+    Returns (agreement_type, terms) or (None, None) if the listing has no price.
+    Rental: 1-month deposit, no key money, 24-month contract. Sale: 10% deposit.
+    All values are integer yen (the canonical schema forbids floats).
+    """
+    rent = m.get("rent_yen")
+    price_man = m.get("price_man")
+    if rent:
+        rent = int(rent)
+        return "rental", {
+            "monthly_rent_yen": rent,
+            "deposit_yen": rent,
+            "key_money_yen": 0,
+            "maintenance_fee_yen": 0,
+            "contract_months": 24,
+        }
+    if price_man:
+        price_yen = int(price_man) * 10_000
+        return "sale", {"price_yen": price_yen, "deposit_yen": price_yen // 10}
+    return None, None
+
+
 def build_reply(inq: dict, company: str, max_listings: int) -> str:
     crit = inq.get("criteria") or {}
     area = crit.get("ward") or crit.get("city") or crit.get("prefecture") or "ご希望のエリア"
@@ -101,7 +125,33 @@ def build_reply(inq: dict, company: str, max_listings: int) -> str:
     return "\n".join(lines)
 
 
-async def poll_once(key: str, url: str, limit: int, max_listings: int, dry_run: bool) -> None:
+async def _handle_inquiry(s, inq, company, max_listings, propose):
+    """Propose terms on an inquiry (if --propose and a priceable listing exists),
+    else post a plain reply. Returns a short outcome string for logging."""
+    iid = inq["inquiry_id"]
+    listings = inq.get("matched_listings") or []
+    if propose:
+        for m in listings:
+            atype, terms = derive_terms(m)
+            if not atype:
+                continue
+            res = await _one(s, "broker_propose_terms", {
+                "inquiry_id": iid, "listing_id": m["id"],
+                "agreement_type": atype, "terms": terms})
+            if (res or {}).get("ok"):
+                return f"inq {iid}: proposal {res['proposal_id']} ({atype})"
+            # fall through to reply if the proposal was rejected
+            break
+    msg = build_reply(inq, company, max_listings)
+    lids = [m["id"] for m in listings][:max_listings]
+    res = await _one(s, "broker_respond",
+                     {"inquiry_id": iid, "message": msg, "listing_ids": lids})
+    if (res or {}).get("posted"):
+        return f"inq {iid}: replied"
+    return f"inq {iid}: FAILED ({(res or {}).get('error')})"
+
+
+async def poll_once(key, url, limit, max_listings, dry_run, propose) -> None:
     full_url = f"{url}?agent_key={key}"
     async with streamablehttp_client(full_url) as (r, w, _):
         async with ClientSession(r, w) as s:
@@ -111,29 +161,23 @@ async def poll_once(key: str, url: str, limit: int, max_listings: int, dry_run: 
 
             tool = "broker_list_inquiries" if dry_run else "broker_get_new_inquiries"
             inqs = await _many(s, tool, {"limit": limit})
-            # Only respond to still-open inquiries (skip closed/accepted ones).
+            # Only act on still-open inquiries (skip closed/accepted ones).
             open_inqs = [i for i in inqs if i.get("status") == "open"]
             if not open_inqs:
                 _log(f"{company}: no new open inquiries")
                 return
 
-            replied, failed = [], []
+            if dry_run:
+                for inq in open_inqs:
+                    action = "propose terms" if (propose and (inq.get("matched_listings") or [])) else "reply"
+                    _log(f"[dry-run] would {action} on inquiry {inq['inquiry_id']} "
+                         f"(thread {inq.get('thread_id')})")
+                return
+
+            outcomes = []
             for inq in open_inqs:
-                iid = inq["inquiry_id"]
-                msg = build_reply(inq, company, max_listings)
-                lids = [m["id"] for m in (inq.get("matched_listings") or [])][:max_listings]
-                if dry_run:
-                    _log(f"[dry-run] would reply to inquiry {iid} (thread {inq.get('thread_id')}):\n{msg}")
-                    continue
-                resp = await _one(s, "broker_respond",
-                                  {"inquiry_id": iid, "message": msg, "listing_ids": lids})
-                if (resp or {}).get("posted"):
-                    replied.append(iid)
-                else:
-                    failed.append((iid, (resp or {}).get("error")))
-            if not dry_run:
-                _log(f"{company}: replied to {replied or '[]'}"
-                     + (f", failed {failed}" if failed else ""))
+                outcomes.append(await _handle_inquiry(s, inq, company, max_listings, propose))
+            _log(f"{company}: " + "; ".join(outcomes))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,6 +188,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-listings", type=int, default=3, help="listings to cite per reply")
     ap.add_argument("--url", default=DEFAULT_URL, help=f"MCP endpoint (default {DEFAULT_URL})")
     ap.add_argument("--dry-run", action="store_true", help="preview replies without posting (non-destructive)")
+    ap.add_argument("--propose", action="store_true",
+                    help="send a term proposal (broker_propose_terms) per inquiry instead of a plain "
+                         "reply, so customers can accept + anchor. Terms derived from the listing.")
     args = ap.parse_args(argv)
 
     key = os.environ.get("FANGO_BROKER_KEY", "").strip()
@@ -153,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
 
     async def _cycle():
         try:
-            await poll_once(key, args.url, args.limit, args.max_listings, args.dry_run)
+            await poll_once(key, args.url, args.limit, args.max_listings, args.dry_run, args.propose)
         except Exception as exc:  # keep the daemon alive across transient errors
             _log(f"poll error: {exc!r}")
 
@@ -161,7 +208,8 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_cycle())
         return 0
 
-    _log(f"autoresponder started: every {args.interval}s against {args.url}")
+    _log(f"autoresponder started: every {args.interval}s against {args.url}"
+         f" ({'propose terms' if args.propose else 'reply only'})")
     async def _loop():
         while True:
             await _cycle()
