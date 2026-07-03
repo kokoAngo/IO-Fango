@@ -30,11 +30,23 @@ echo "    repo: $REPO_DIR"
 FANGO_UNIT="$(systemctl cat fangoio 2>/dev/null || true)"
 [ -n "$FANGO_UNIT" ] || echo "    (fangoio unit not found — falling back to defaults)"
 
-PYTHON="$(printf '%s\n' "$FANGO_UNIT" | sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' | head -1)"
-if [ -z "${PYTHON:-}" ] || [ ! -x "$PYTHON" ]; then
-  PYTHON="$REPO_DIR/.venv/bin/python"
+# fangoio's ExecStart may be uvicorn/gunicorn, not python — take the python that
+# lives in the SAME bin dir (the venv), not the ExecStart binary itself.
+EXEC_BIN="$(printf '%s\n' "$FANGO_UNIT" | sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' | head -1)"
+PYTHON=""
+if [ -n "$EXEC_BIN" ]; then
+  BIN_DIR="$(dirname "$EXEC_BIN")"
+  for cand in "$BIN_DIR/python" "$BIN_DIR/python3"; do
+    [ -x "$cand" ] && { PYTHON="$cand"; break; }
+  done
 fi
-[ -x "$PYTHON" ] || { echo "error: python interpreter not found at '$PYTHON'" >&2; exit 1; }
+if [ -z "$PYTHON" ]; then
+  for cand in "$REPO_DIR/.venv/bin/python" "$REPO_DIR/.venv/bin/python3"; do
+    [ -x "$cand" ] && { PYTHON="$cand"; break; }
+  done
+fi
+[ -n "$PYTHON" ] && [ -x "$PYTHON" ] || {
+  echo "error: python not found next to '$EXEC_BIN' or in $REPO_DIR/.venv/bin" >&2; exit 1; }
 
 SVC_USER="$(printf '%s\n' "$FANGO_UNIT" | sed -n 's/^User=\(.*\)/\1/p' | head -1)"
 [ -n "${SVC_USER:-}" ] || SVC_USER="$(id -un)"
