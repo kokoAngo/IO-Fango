@@ -100,6 +100,7 @@ def register(mcp) -> None:
     async def fango_consult(
         message: str,
         session_id: str | None = None,
+        category: str | None = None,
     ) -> dict[str, Any]:
         """Natural-language house-hunting advisor.
 
@@ -111,6 +112,13 @@ def register(mcp) -> None:
         Pass the ``session_id`` from a previous response back in to continue
         the same conversation.
 
+        Pass ``category`` to declare the board/intent up front so FANGO never has
+        to guess 買房 vs 租房: ``"sale"`` (売買), ``"rental"`` (賃貸), ``"chat"``
+        (雑談), ``"dojo"`` (道場), or ``"auto"`` to let FANGO classify from the
+        message (the default when omitted). When set to sale/rental it is
+        authoritative — the listing search and the forum routing both honour it,
+        so a buyer never gets 賃貸 results back.
+
         ``listing_links`` carries public "rent it here" HOMES URLs (with a photo)
         for the listings shown in this session. These are fetched in the
         background, so the field is usually EMPTY on the turn that first shows a
@@ -120,6 +128,9 @@ def register(mcp) -> None:
         Args:
             message: The current user turn (free-form Japanese or English).
             session_id: Continue an existing dialogue. Omit on the first call.
+            category: Optional board/intent tag — one of "sale", "rental",
+                "chat", "dojo", "auto". Missing or "auto" → FANGO classifies
+                from the message.
 
         Returns:
             dict with keys ``session_id``, ``reply``, ``state``
@@ -134,7 +145,9 @@ def register(mcp) -> None:
         # the tool async and push the blocking work to a worker thread; anyio
         # carries the request contextvars (agent key / client IP) into it.
         return await anyio.to_thread.run_sync(
-            functools.partial(_run_turn, message=message, session_id=session_id)
+            functools.partial(
+                _run_turn, message=message, session_id=session_id, category=category,
+            )
         )
 
 
@@ -142,7 +155,28 @@ def register(mcp) -> None:
 # Core handler — separated from the decorator for testability.
 # ---------------------------------------------------------------------------
 
-def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
+# Caller-declared category → (canonical intent, forum slug). Lenient on aliases so
+# an agent can send friendly words in any of the three languages. Anything not
+# recognised (incl. "auto"/"either"/None) → (None, None) = fall back to inference.
+_CATEGORY_FORUM = {"sale": "baibai", "rental": "chintai", "chat": "chat", "dojo": "dojo"}
+
+
+def _normalize_category(category: str | None) -> str | None:
+    s = str(category or "").strip().lower()
+    if s in ("sale", "buy", "baibai", "売買", "买房", "购房", "购买", "卖房"):
+        return "sale"
+    if s in ("rental", "rent", "chintai", "賃貸", "租房", "租赁", "租"):
+        return "rental"
+    if s in ("chat", "夜咄", "雑談", "闲聊", "杂谈"):
+        return "chat"
+    if s in ("dojo", "道場", "道场"):
+        return "dojo"
+    return None  # auto / either / unknown / empty → let FANGO classify
+
+
+def _run_turn(
+    message: str, session_id: str | None, category: str | None = None,
+) -> dict[str, Any]:
     settings = load_consult_settings()
     agent = current_agent_var.get()  # optional; consult does not require auth
     agent_id = agent.id if agent else None
@@ -218,6 +252,18 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             for k in _SALE_K:
                 merged.pop(k, None)
         merged.update(delta)
+
+        # Caller-declared category wins over the LLM's buy-vs-rent guess. For
+        # sale/rental we pin transaction_type (drives both the listing search
+        # filter and forum routing) and drop the opposite mode's stale budget so
+        # it can't skew the search. chat/dojo only steer the board. 'auto'/None →
+        # unchanged.
+        cat_norm = _normalize_category(category)
+        forum_override = _CATEGORY_FORUM.get(cat_norm)
+        if cat_norm in ("sale", "rental"):
+            merged["transaction_type"] = cat_norm
+            for k in (_SALE_K if cat_norm == "rental" else _RENT_K):
+                merged.pop(k, None)
 
         usage_in = intent.input_tokens
         usage_out = intent.output_tokens
@@ -313,6 +359,7 @@ def _run_turn(message: str, session_id: str | None) -> dict[str, Any]:
             ip=client_ip_var.get(),
             compliant=intent.compliant,
             forum_class=intent.forum,
+            forum_override=forum_override,
             area_key=intent.area_key,
             conn=conn,
         )

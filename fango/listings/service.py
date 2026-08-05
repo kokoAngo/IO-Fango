@@ -295,6 +295,20 @@ def _build_search_where(criteria: dict[str, Any]) -> tuple[str, list[Any], str]:
     if criteria.get("broker_owned_only"):
         where.append("listings.broker_agent_id IS NOT NULL")
 
+    # Caller-declared buy-vs-rent intent (fango_consult `category` / search
+    # `transaction_type`). Authoritative when present so a 買房 request never gets
+    # 賃貸 rows back and vice-versa. Absent / 'either' / 'auto' → both types stay
+    # eligible (legacy behaviour). Keyed on transaction_type (the canonical
+    # sale/rent column) — NOT listing_type, which is the building type (アパート/
+    # マンション). Sale is the only clean value in the column; rental is expressed
+    # as "not sale" so it also covers the 取引態様-polluted rows (一般/専任/代理/
+    # 貸主) and NULLs, which are all non-sale.
+    _tt = str(criteria.get("transaction_type") or "").strip().lower()
+    if _tt in ("sale", "buy", "baibai", "売買"):
+        where.append("COALESCE(listings.transaction_type,'') = 'sale'")
+    elif _tt in ("rental", "rent", "chintai", "賃貸"):
+        where.append("COALESCE(listings.transaction_type,'') != 'sale'")
+
     # Sale (売買) listings are only recommended while 取引状況 = 公開中 (on-market),
     # so we never surface 成約済み / 申込あり / 一時停止 ones (legally important:
     # avoids おとり広告). Always applied; rental / other rows are unaffected.

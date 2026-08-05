@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
 """Give a broker inventory across many wards so it routes + can propose everywhere.
 
-For each ward it tops the broker up to ``--per-ward`` rental listings (drawn from
-the unowned house pool), marks them advertisable (ad_status='可' — required so they
-surface in search and feed broker_propose_terms), and merges those wards into the
-broker's ``areas`` (so area-based routing fires for them too).
+For each ward it tops the broker up to ``--per-ward`` listings of one transaction
+type (drawn from the unowned house pool), marks them advertisable so they surface
+in search and feed broker_propose_terms, and merges those wards into the broker's
+``areas`` (so area-based routing fires for them too).
 
-    python -m scripts.assign_broker_inventory --broker-id 49 --per-ward 15 --dry-run
+``--transaction-type`` picks which pool to draw from (default ``rental``):
+  * ``rental`` — non-sale rows that have a rent (``rent_yen``); marked ad_status='可'.
+  * ``sale``   — ``transaction_type='sale'`` rows that have a price (``price_man``);
+                 marked ad_status='公開中' (the on-market gate sale rows need to
+                 surface — '可' is the RENTAL gate and would leave sale rows hidden).
+
+    # give broker 49 rental inventory (current default behaviour)
     python -m scripts.assign_broker_inventory --broker-id 49 --per-ward 15
+    # ALSO give it sale inventory so it can serve 買房 customers
+    python -m scripts.assign_broker_inventory --broker-id 49 --per-ward 15 --transaction-type sale
 
-Idempotent: re-running with the same --per-ward is a no-op once each ward is full.
+Idempotent per type: the per-ward top-up counts only the broker's listings OF THE
+SAME type, so assigning ``sale`` doesn't get blocked by rentals it already owns,
+and re-running with the same --per-ward is a no-op once each ward is full.
 Ward key = COALESCE(NULLIF(ward,''), city), so it works whether the ward name
 lives in the `ward` or the `city` column.
 
-NOTE: forcing ad_status='可' presents these as advertisable. Fine for a
+NOTE: forcing an advertisable status presents these as advertisable. Fine for a
 prototype/simulation fleet; for real listings, only advertise ones that genuinely
 are (avoid おとり広告).
 """
@@ -49,9 +59,21 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Assign per-ward inventory to a broker.")
     ap.add_argument("--broker-id", type=int, required=True)
     ap.add_argument("--per-ward", type=int, default=15, help="target listings per ward (default 15)")
+    ap.add_argument("--transaction-type", choices=["rental", "sale"], default="rental",
+                    help="which pool to draw from (default rental)")
     ap.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
     ap.add_argument("--no-areas", action="store_true", help="don't touch the broker's areas")
     args = ap.parse_args(argv)
+
+    # Type-specific candidate predicate + advertisable status. Sale rows surface
+    # only when ad_status='公開中' (on-market); rentals only when ad_status='可'
+    # (advertising cleared) — using the wrong gate leaves the assigned rows hidden.
+    if args.transaction_type == "sale":
+        type_where = "COALESCE(listings.transaction_type,'') = 'sale' AND listings.price_man IS NOT NULL"
+        new_ad_status = "公開中"
+    else:  # rental
+        type_where = "COALESCE(listings.transaction_type,'') != 'sale' AND listings.rent_yen IS NOT NULL"
+        new_ad_status = "可"
 
     bootstrap()
     conn = connect()
@@ -59,21 +81,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: agent {args.broker_id} is not an active broker", file=sys.stderr)
         return 2
 
-    # How many this broker already owns per ward (for idempotent top-up).
+    # How many of THIS type the broker already owns per ward (for idempotent
+    # top-up). Scoped to the type so a broker's existing rentals don't block a
+    # sale top-up (and vice-versa).
     owned: dict[str, int] = {}
     for r in conn.execute(
         f"SELECT {_WARD} AS w, COUNT(*) n FROM listings "
-        f"WHERE broker_agent_id = ? AND {_WARD} IS NOT NULL AND {_WARD} != '' GROUP BY w",
+        f"WHERE broker_agent_id = ? AND {type_where} "
+        f"AND {_WARD} IS NOT NULL AND {_WARD} != '' GROUP BY w",
         (args.broker_id,),
     ).fetchall():
         owned[r["w"]] = r["n"]
 
-    # Candidate unowned rentals, grouped by ward.
+    # Candidate unowned listings of this type, grouped by ward.
     by_ward: dict[str, list[int]] = {}
     for r in conn.execute(
         f"SELECT listings.id AS id, {_WARD} AS w FROM listings "
-        f"WHERE broker_agent_id IS NULL AND COALESCE(transaction_type,'') != 'sale' "
-        f"AND rent_yen IS NOT NULL AND {_WARD} IS NOT NULL AND {_WARD} != '' "
+        f"WHERE broker_agent_id IS NULL AND {type_where} "
+        f"AND {_WARD} IS NOT NULL AND {_WARD} != '' "
         f"ORDER BY w, listings.id"
     ).fetchall():
         by_ward.setdefault(r["w"], []).append(r["id"])
@@ -89,24 +114,27 @@ def main(argv: list[str] | None = None) -> int:
             assign_ids.extend(take)
 
     print(f"broker {args.broker_id}: {len(plan)} ward(s) to top up, "
-          f"{len(assign_ids)} listing(s) to assign (target {args.per_ward}/ward)")
+          f"{len(assign_ids)} {args.transaction_type} listing(s) to assign "
+          f"(target {args.per_ward}/ward)")
     for ward, have, take in plan:
         print(f"  {ward:<10} owned {have:>3} → +{take}")
 
     # Wards the broker will cover after this (owned + newly assigned).
     covered = {_core(w) for w in owned} | {_core(w) for w, _, _ in plan}
     if args.dry_run:
-        print(f"\ndry-run: would assign {len(assign_ids)} listing(s); "
+        print(f"\ndry-run: would assign {len(assign_ids)} {args.transaction_type} "
+              f"listing(s) (ad_status='{new_ad_status}'); "
               f"areas would cover {len(covered)} ward(s).")
         return 0
 
     for chunk in _chunks(assign_ids):
         ph = ",".join("?" * len(chunk))
         conn.execute(
-            f"UPDATE listings SET broker_agent_id = ?, ad_status = '可' WHERE id IN ({ph})",
-            [args.broker_id, *chunk],
+            f"UPDATE listings SET broker_agent_id = ?, ad_status = ? WHERE id IN ({ph})",
+            [args.broker_id, new_ad_status, *chunk],
         )
-    print(f"assigned {len(assign_ids)} listing(s) → broker {args.broker_id} (ad_status='可')")
+    print(f"assigned {len(assign_ids)} {args.transaction_type} listing(s) → "
+          f"broker {args.broker_id} (ad_status='{new_ad_status}')")
 
     if not args.no_areas:
         existing = set(bsvc.get_broker(args.broker_id, conn=conn)["areas"])

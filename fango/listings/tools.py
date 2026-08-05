@@ -254,6 +254,7 @@ def register(mcp) -> None:
         limit: int = 20,
         offset: int = 0,
         sort_by: str = "newest",
+        transaction_type: str | None = None,
     ) -> dict[str, Any]:
         """Search Japanese real-estate listings by structured criteria.
 
@@ -274,6 +275,12 @@ def register(mcp) -> None:
             offset: Pagination offset.
             sort_by: One of newest, oldest, price_asc, price_desc, rent_asc,
                 rent_desc, area_desc, walk_asc. Default: newest.
+            transaction_type: Restrict to "sale" (売買) or "rental" (賃貸). Omit
+                or pass "either" to search both. When set, a 買房 search never
+                returns 賃貸 rows and vice-versa. (This is the 取引種別, distinct
+                from a listing's building type. Equivalent to putting
+                ``transaction_type`` inside ``criteria``; this arg wins if both
+                given.)
 
         Returns:
             {"total": int, "items": [<listing brief>...],
@@ -287,6 +294,14 @@ def register(mcp) -> None:
         """
         _enforce_read_quota()
         crit = dict(criteria or {})
+        # Explicit arg is authoritative over any criteria['transaction_type'];
+        # 'either'/'auto' means "don't filter", so we drop the key rather than
+        # pass it down.
+        if transaction_type is not None:
+            if str(transaction_type).strip().lower() in ("either", "auto", "both", ""):
+                crit.pop("transaction_type", None)
+            else:
+                crit["transaction_type"] = transaction_type
         total = svc.count_listings(criteria=crit)
         rows = svc.search_listings(
             criteria=crit, limit=limit, offset=offset, sort_by=sort_by,

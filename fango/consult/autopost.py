@@ -105,6 +105,7 @@ def record_turn(
     ip: str | None,
     compliant: bool,
     forum_class: str | None = None,
+    forum_override: str | None = None,
     area_key: str = "",
     conn=None,
 ) -> dict[str, Any]:
@@ -163,8 +164,9 @@ def record_turn(
                 # stay pinned to session.log_forum. Only re-route on an actual
                 # search signal so a criteria-less follow-up doesn't bounce boards.
                 new_forum = (
-                    _route_forum(criteria, forum_class)
-                    if _has_search_signal(criteria) else session.log_forum
+                    _route_forum(criteria, forum_class, forum_override)
+                    if (_has_search_signal(criteria) or forum_override in _ALL_FORUMS)
+                    else session.log_forum
                 )
                 area_changed = bool(area_key and prev_area and area_key != prev_area)
                 forum_changed = new_forum != session.log_forum
@@ -182,7 +184,7 @@ def record_turn(
                     thread_id = session.log_thread_id
                     is_new_thread = False
             else:
-                forum = _route_forum(criteria, forum_class)
+                forum = _route_forum(criteria, forum_class, forum_override)
                 # First post of this session: join the caller's active thread for
                 # this forum+area if it's still warm, else open a fresh one. Keying
                 # on area_key keeps 大田区 and 文京区 consults in separate threads.
@@ -573,9 +575,18 @@ def _has_search_signal(criteria: dict[str, Any]) -> bool:
     return any(crit.get(k) not in (None, "") for k in _SEARCH_KEYS)
 
 
-def _route_forum(criteria: dict[str, Any], moderation_forum: str | None) -> str:
-    """First-post routing: trust criteria for real-estate search, else the
-    moderator's classification."""
+_ALL_FORUMS = ("baibai", "chintai", "chat", "dojo")
+
+
+def _route_forum(
+    criteria: dict[str, Any],
+    moderation_forum: str | None,
+    forum_override: str | None = None,
+) -> str:
+    """First-post routing: a caller-declared board wins outright, then criteria
+    for real-estate search, else the moderator's classification."""
+    if forum_override in _ALL_FORUMS:
+        return forum_override  # caller declared the board explicitly — authoritative
     if _has_search_signal(criteria):
         return _route(criteria, moderation_forum)
     if moderation_forum in ("baibai", "chintai", "chat", "dojo"):
