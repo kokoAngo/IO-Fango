@@ -143,6 +143,13 @@ class ConsultRequest(BaseModel):
     session_id: Optional[str] = Field(
         None, description="Pass the session_id from a previous response to continue the dialogue. Omit on the first call.",
     )
+    category: Optional[str] = Field(
+        None,
+        description="Board/intent tag: 'sale' (売買), 'rental' (賃貸), 'chat', 'dojo', "
+                    "or 'auto' (let FANGO classify from the message). Omit = 'auto'. "
+                    "When 'sale'/'rental' it is authoritative — the listing search and "
+                    "forum routing both honour it, so a buyer never gets 賃貸 results.",
+    )
 
 
 class Usage(BaseModel):
@@ -285,7 +292,7 @@ def consult(body: ConsultRequest) -> dict[str, Any]:
     returns both a natural-language recommendation (``reply``) and structured
     ``results``. Pass ``session_id`` from the previous response to continue."""
     _log_access("fango_consult", message=body.message)
-    return _run_turn(message=body.message, session_id=body.session_id)
+    return _run_turn(message=body.message, session_id=body.session_id, category=body.category)
 
 
 @api_router.get(
@@ -329,6 +336,9 @@ def search_listings(
     area_max_sqm: Optional[float] = Query(None),
     walk_minutes_max: Optional[int] = Query(None, description="Max walk minutes to the station."),
     built_year_min: Optional[int] = Query(None, description="Built in this year or later."),
+    transaction_type: Optional[str] = Query(
+        None, description="Restrict to 'sale' (売買) or 'rental' (賃貸). Omit / 'either' = both. "
+                          "This is the 取引種別, not the building type."),
     sort_by: str = Query("newest", description="newest|oldest|price_asc|price_desc|rent_asc|rent_desc|area_desc|walk_asc"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -350,6 +360,9 @@ def search_listings(
             "walk_minutes_max": walk_minutes_max, "built_year_min": built_year_min,
         }.items() if v is not None
     }
+    # 'either'/'auto' means "don't restrict"; only pass a real sale/rental filter.
+    if transaction_type and str(transaction_type).strip().lower() not in ("either", "auto", "both"):
+        criteria["transaction_type"] = transaction_type
     _log_access("fango_search_listings", criteria=criteria)
     total = ls.count_listings(criteria=criteria)
     rows = ls.search_listings(criteria=criteria, limit=limit, offset=offset, sort_by=sort_by)
