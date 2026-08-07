@@ -672,7 +672,8 @@ def get_listing_with_relations(
 def to_dict(listing: Listing) -> dict[str, Any]:
     d = {
         "id": listing.id,
-        "external_id": listing.reins_id,
+        # no external_id: listing.reins_id is the source 物件番号 (would disclose
+        # the upstream provider). Reference listings by `id`.
         "title": listing.title,
         "building_name": listing.building_name,
         "address": listing.address,

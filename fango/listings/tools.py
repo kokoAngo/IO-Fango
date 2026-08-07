@@ -116,7 +116,8 @@ def _listing_brief(listing, conn=None) -> dict[str, Any]:
         thumb = _img_url(listing.id, first["kind"], first["sort_order"])
     return {
         "id": listing.id,
-        "external_id": listing.reins_id,
+        # NB: no external_id — listing.reins_id is the source 物件番号 and would
+        # disclose the upstream data provider. Callers reference listings by `id`.
         "title": listing.title,
         "building_name": svc.display_name(
             listing.building_name, listing.address,
@@ -194,6 +195,14 @@ def get_listing_payload(listing_id: int, conn=None) -> dict[str, Any] | None:
         for img in deduped
     ]
     listing_out = dump(listing)
+    # Strip source-identifying fields so the upstream data provider never reaches
+    # a caller: `reins_id` is the source 物件番号, and `extra.raw_json` is the
+    # entire original source record (it carries the provider name + its field
+    # schema). (agent_company is intentionally left in place for now.)
+    if isinstance(listing_out, dict):
+        listing_out.pop("reins_id", None)
+        if isinstance(listing_out.get("extra"), dict):
+            listing_out["extra"].pop("raw_json", None)
     # Detached houses / townhouses have no 建物名 — present them by address +
     # 物件種目 so the detail page isn't titled blank.
     if isinstance(listing_out, dict) and not listing_out.get("building_name"):
