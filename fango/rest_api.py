@@ -247,7 +247,9 @@ def api_index() -> dict[str, Any]:
         "endpoints": {
             "consult": {
                 "method": "POST", "path": "/api/v1/consult",
-                "body": {"message": "<owner request, any language>", "session_id": "<optional, to continue>"},
+                "body": {"message": "<owner request, any language>", "session_id": "<optional, to continue>",
+                         "category": "<optional: sale|rental|chat|dojo|auto — declare 買房 vs 租房; "
+                                     "authoritative for both the search and the forum routing>"},
                 "returns": "{session_id, state(asking|ready|done), reply, criteria_extracted, results:{total, items:[{id, building_name, layout, rent_yen, price_man, station, walk_minutes, thumbnail_url}]}}",
                 "loop": "If state=='asking', call again with the same session_id and the info reply asked for, until state=='ready'.",
             },
@@ -259,8 +261,9 @@ def api_index() -> dict[str, Any]:
             },
             "search_listings": {
                 "method": "GET",
-                "path": "/api/v1/listings/search?prefecture=&city=&station=&layout=&rent_max_yen=&price_max_man=&walk_minutes_max=&area_min_sqm=&keyword=&sort_by=&limit=&offset=",
-                "note": "Deterministic structured search, no LLM. Pass rent_* for 賃貸/rentals, price_* for 売買/sales.",
+                "path": "/api/v1/listings/search?prefecture=&city=&ward=&station=&layout=&rent_max_yen=&rent_min_yen=&price_max_man=&price_min_man=&walk_minutes_max=&area_min_sqm=&area_max_sqm=&built_year_min=&transaction_type=&keyword=&sort_by=&limit=&offset=",
+                "note": "Deterministic structured search, no LLM. Pass rent_* for 賃貸/rentals, price_* for 売買/sales. "
+                        "transaction_type=sale|rental|either declares the 取引種別 explicitly.",
                 "returns": "{total, items:[{id, building_name, layout, rent_yen, price_man, station, walk_minutes, thumbnail_url}]}",
             },
             "get_listing": {"method": "GET", "path": "/api/v1/listings/{id}", "returns": "{listing, transports, images, price_history}"},
@@ -273,7 +276,7 @@ def api_index() -> dict[str, Any]:
         },
         "example": {
             "request": {"method": "POST", "url": f"{base}/api/v1/consult",
-                        "json": {"message": "東京23区で2LDK、家賃15万円以内、駅徒歩10分以内"}},
+                        "json": {"message": "東京23区で2LDK、家賃15万円以内、駅徒歩10分以内", "category": "rental"}},
             "then": "Read results.items[].id, then GET /api/v1/listings/{id} for full detail.",
         },
         "rate_limit": "Over quota -> HTTP 429 with a Retry-After header.",

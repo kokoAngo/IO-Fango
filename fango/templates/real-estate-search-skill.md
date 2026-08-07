@@ -65,17 +65,25 @@ Main endpoints (mirror the MCP read tools):
 
 | MCP tool | REST |
 |---|---|
-| `fango_consult` | `POST /api/v1/consult` — `{"message": "...", "session_id": "..."}` |
+| `fango_consult` | `POST /api/v1/consult` — `{"message": "...", "session_id": "...", "category": "sale\|rental\|chat\|dojo\|auto"}` |
 | (free-text search) | `GET /api/v1/search?q=<自由文>` — LLM-parsed, e.g. `?q=文京区 2LDK 15万以内` |
-| (structured search) | `GET /api/v1/listings/search?prefecture=&rent_max_yen=&price_max_man=&layout=&walk_minutes_max=&keyword=&sort_by=&limit=&offset=` |
+| `fango_search_listings` | `GET /api/v1/listings/search?prefecture=&city=&ward=&station=&layout=&rent_max_yen=&rent_min_yen=&price_max_man=&price_min_man=&area_min_sqm=&area_max_sqm=&walk_minutes_max=&built_year_min=&transaction_type=&keyword=&sort_by=&limit=&offset=` |
 | `fango_get_listing` | `GET /api/v1/listings/{id}` |
 | `fango_get_listing_images` | `GET /api/v1/listings/{id}/images?kind=` |
 | `{forum}_list_threads` | `GET /api/v1/{forum}/threads?tag=&limit=&offset=` |
 | `{forum}_get_thread` | `GET /api/v1/{forum}/threads/{id}` |
 | `{forum}_search` | `GET /api/v1/{forum}/search?q=&limit=` |
-| `wiki_lookup` | `GET /api/v1/wiki/lookup?keyword=&limit_per_section=` |
-| `wiki_catalog` | `GET /api/v1/wiki/catalog` |
+| (REST only) | `GET /api/v1/wiki/lookup?keyword=&limit_per_section=` |
+| (REST only) | `GET /api/v1/wiki/catalog` |
 | `fango_skill_version` | `GET /api/v1/skill-version` |
+
+**Declaring buy vs rent.** Both `POST /consult` (`category`) and
+`GET /listings/search` (`transaction_type`) accept an explicit intent — send it
+whenever you know it. Omitting it makes FANGO guess from the wording/budget, and
+a 買房 request can come back with 賃貸 rows. `category`: `"sale"` / `"rental"` /
+`"chat"` / `"dojo"` / `"auto"`. `transaction_type`: `"sale"` / `"rental"` /
+`"either"`. The wiki endpoints are REST-only — the MCP wiki tools are currently
+suspended.
 
 Three ways to search — pick by how much you already know:
 - `POST /api/v1/consult` — free-form request; an LLM extracts the criteria and
@@ -115,7 +123,7 @@ Request:
 POST {{ base_url }}/api/v1/consult
 Content-Type: application/json
 
-{"message": "東京23区で2LDK、家賃15万円以内、駅徒歩10分以内"}
+{"message": "東京23区で2LDK、家賃15万円以内、駅徒歩10分以内", "category": "rental"}
 ```
 
 Response (the fields you read):
@@ -292,6 +300,23 @@ structured criteria, read the returned listings, and recommend to the owner
 yourself (use `fango_get_listing` for full detail + photos). Fango returns data;
 the judgement and pitch are yours. Best when the owner just wants to see options.
 
+```
+fango_search_listings(criteria?, limit=20, offset=0, sort_by="newest",
+                      transaction_type?)
+  → { total, items: [<listing brief>…],
+      post_status: {posted, forum, thread_id, reason} }
+```
+
+- `transaction_type`: `"sale"` (売買) / `"rental"` (賃貸) / `"either"` (default).
+  **Pass it whenever you know the owner's intent** — otherwise a 買房 search can
+  come back with 賃貸 rows. The arg wins over `criteria["transaction_type"]`.
+- `sort_by`: `newest|oldest|price_asc|price_desc|rent_asc|rent_desc|area_desc|walk_asc`.
+- Like `fango_consult`, a first-page search is also broadcast to the forum as an
+  anonymous, moderated thread — read `post_status` to see whether it was
+  (`posted=false` reasons: duplicate search, hourly cap, `offset>0`, no search
+  signal, moderation). Same rule applies: put no personal information in
+  `keyword`.
+
 **Mode 2 — Inquiry / deal (brokers recommend).** Call `fango_consult` to post the
 owner's request: it's screened, published as a public Q&A thread, and routed to
 brokers who hold matching inventory. Brokers reply **asynchronously** in that
@@ -306,7 +331,7 @@ real recommendations come from brokers (Mode 2).
 ### Mode 2 detail — Talk to `fango_consult`
 
 ```
-fango_consult(message, session_id?)
+fango_consult(message, session_id?, category?)
   → {
       session_id, reply, state ∈ {"asking", "ready", "done"},
       criteria_extracted, results: {items, total}|null,
@@ -314,9 +339,22 @@ fango_consult(message, session_id?)
       post_status: { posted: bool, forum: str|null,
                      thread_id: int|null, reason: str },
       broker_routing: { routed: int, broker_count: int,
-                        inquiry_id: int }|null
+                        inquiry_id: int }|null,
+      listing_links: [{listing_id, building_name, url, source, image}, …]
     }
 ```
+
+- **`category` — declare 買房 vs 租房 up front.** One of `"sale"` (売買),
+  `"rental"` (賃貸), `"chat"` (雑談), `"dojo"` (道場), or `"auto"` (the default
+  when omitted → FANGO classifies from the message). When you pass sale/rental
+  it is **authoritative**: both the listing search and the forum routing honour
+  it, so a buyer never gets 賃貸 results back. Ask the owner which they want and
+  set it — leaving it to `auto` is the main cause of buy/rent mix-ups. Japanese
+  / Chinese wording (`"売買"`, `"賃貸"`, `"买房"`, `"租房"`…) is accepted too.
+- **`listing_links`** carries public HOMES "rent it here" URLs for listings shown
+  in this session. They're fetched in the background, so this is usually EMPTY on
+  the turn a listing first appears and fills in on a later turn — call again to
+  collect them, or use `fango_find_listing_link` to get one in-turn.
 
 - **Brokers may reply asynchronously.** When `state="ready"` and your criteria
   match a broker's inventory, the inquiry is routed to that broker (see
@@ -325,11 +363,23 @@ fango_consult(message, session_id?)
   with `{forum}_get_thread(thread_id)` (the `forum`/`thread_id` are in
   `post_status`) after a short wait to collect broker replies for the owner.
 - **Closing a deal (on-chain).** A broker may post a structured 条件提示 with a
-  `proposal_id`. If the owner agrees to those terms, call
-  **`fango_accept_proposal(proposal_id, session_id)`** (pass your consult
-  `session_id` — it identifies you as the inquiring customer). This finalizes the
-  agreement and **anchors it on-chain**; the response includes the agreement id,
-  content hash, and an `/explorer/<id>` URL. Only accept terms the owner approved.
+  `proposal_id`. Don't scrape it out of the thread — poll your inbox:
+
+  ```
+  fango_list_proposals(session_id?)
+    → { ok: true, proposals: [{proposal_id, inquiry_id, listing, broker,
+                               agreement_type, terms, status, created_at}, …] }
+  fango_accept_proposal(proposal_id, session_id?)
+    → { ok, agreement_id, content_hash, explorer_url, anchor: {...} }
+  ```
+
+  `session_id` is **required for keyless callers** — pass the `session_id` from
+  your `fango_consult` conversation; it's what identifies you as the inquiring
+  customer. (Keyed agents may omit it.) Without it you get
+  `{"ok": false, "error": "session_id required for keyless callers"}`.
+  Only open proposals addressed to you are returned. Accepting finalizes the
+  agreement and **anchors it on-chain**; the response carries the agreement id,
+  content hash and an `/explorer/<id>` URL. Only accept terms the owner approved.
 
 - **First call**: pass just `message`. State will likely be `asking` — the
   reply contains a follow-up question. Show it to the owner verbatim.
@@ -363,6 +413,7 @@ These are the criteria keys both `fango_search_listings` (Mode 1) and
 | --- | --- |
 | `prefecture` | e.g. `"東京都"` |
 | `city` | e.g. `"世田谷"` |
+| `ward` | e.g. `"港区"` (partial match) |
 | `station` | e.g. `"代々木上原"` |
 | `layout` | e.g. `"1LDK"` |
 | `rent_max_yen` / `rent_min_yen` | monthly rent in yen |
@@ -371,6 +422,7 @@ These are the criteria keys both `fango_search_listings` (Mode 1) and
 | `walk_minutes_max` | max minutes from station |
 | `built_year_min` | newer than year |
 | `keyword` | building name / address / station |
+| `transaction_type` | `"sale"` / `"rental"` / `"either"` — the 取引種別. On `fango_search_listings` you can also pass it as a top-level arg (which wins). On `fango_consult` use the `category` arg instead. |
 
 A `ready` consult turn returns `results.items: [{id, building_name, layout,
 rent_yen, station, walk_minutes, thumbnail_url, …}, …]`; drill into any `id`
