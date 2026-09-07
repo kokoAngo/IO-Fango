@@ -330,6 +330,28 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+def _to_utc_iso(value: Any) -> str | None:
+    """Upstream timestamp → the UTC '...Z' string shape the column stores.
+
+    Upstream hands these back as JST-aware datetimes; a naive one is assumed to
+    already be UTC rather than guessed at. The string shape matters: the
+    visibility window compares posted_at textually in SQL, which is only sound
+    while every value is the same fixed-width UTC form.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def _json_safe(row: dict[str, Any]) -> dict[str, Any]:
     """Make a psycopg row JSON-serialisable (datetimes, Decimals → str)."""
     out: dict[str, Any] = {}
@@ -408,6 +430,7 @@ def map_rental_row(row: dict[str, Any]) -> PgRecord:
         "listing_type": _normalize(row.get("property_type")),
         "transaction_type": TT_RENT,
         "tenancy_status": "成約済" if contracted else None,
+        "posted_at": _to_utc_iso(row.get("created_time")),
         "ad_status": _normalize(row.get("ad_ok")),
         "agent_company": _normalize(row.get("mgmt_company")),
         "raw_json": json.dumps(_json_safe(row), ensure_ascii=False),
@@ -489,6 +512,9 @@ def map_sale_row(row: dict[str, Any], images: Sequence[dict[str, Any]] = ()) -> 
         "transaction_type": TT_SALE,
         # 取引状況 (公開中 / 申込あり / 成約) is on-market state, NOT ad clearance.
         "tenancy_status": _normalize(row.get("transaction_status")),
+        # Posting date. Sale has no created_time; first_seen_at is when the row
+        # entered the upstream store, which is the same thing for our purposes.
+        "posted_at": _to_utc_iso(row.get("first_seen_at")),
         # 広告転載可否 is the actual advertising clearance, mirroring the
         # rental 広告可 column.
         "ad_status": _normalize(row.get("ad_repost")),

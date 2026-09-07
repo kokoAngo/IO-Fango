@@ -46,6 +46,11 @@ _LISTINGS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
     # upstream, for retirement). A broker's own hand-created listing must NOT
     # be retired just because no upstream row matches it, so it stays NULL.
     ("source", "TEXT"),
+    # Upstream posting date (賃貸 created_time / 売買 first_seen_at), UTC
+    # '...Z'. Drives the visibility window and the "newest" sort; our own
+    # updated_at cannot, because a bulk sync stamps it identically across
+    # tens of thousands of rows.
+    ("posted_at", "TEXT"),
 )
 
 # Columns added to consult_sessions after the table first shipped (auto-post

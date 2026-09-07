@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from ..db import connect
@@ -35,13 +36,17 @@ LISTING_COLUMNS = (
     "structure", "floor", "total_floors", "direction", "parking",
     "pet_allowed", "renovation", "listing_type", "transaction_type",
     "url", "agent_company", "ad_status", "raw_json", "last_seen_at",
-    "broker_agent_id", "source",
+    "broker_agent_id", "source", "posted_at",
 )
 
 # Whitelisted sort options for search_listings().
 _SORT_BY_SQL: dict[str, str] = {
-    "newest":     "listings.updated_at DESC",
-    "oldest":     "listings.updated_at ASC",
+    # posted_at is the upstream posting date; updated_at is when *we* last wrote
+    # the row, which a bulk sync sets to the same instant for tens of thousands
+    # of rows at once — "newest" ordered by it is arbitrary. Fall back to
+    # updated_at only for locally-created rows, which have no posting date.
+    "newest":     "COALESCE(listings.posted_at, listings.updated_at) DESC",
+    "oldest":     "COALESCE(listings.posted_at, listings.updated_at) ASC",
     "price_asc":  "listings.price_man ASC NULLS LAST",
     "price_desc": "listings.price_man DESC NULLS LAST",
     "rent_asc":   "listings.rent_yen ASC NULLS LAST",
@@ -129,11 +134,42 @@ def upsert_listing(payload: dict[str, Any], conn: sqlite3.Connection | None = No
 #      Sale: 取引状況. Only 成約 / 申込あり take a row off-market; the bulk of
 #      the inventory sits at "-", which means "not posted to a portal", not
 #      "sold" — gating on 公開中 would hide ~88% of live, ad-cleared listings.
-#      Rental rows express this by not being ingested once 成約 (see the
-#      Postgres adapter), so this axis is sale-only.
+#      Rental: 成約済, written by the ingest when upstream links a 成約 record.
+#      This axis used to be sale-only, on the theory that a contracted rental
+#      is simply never ingested. That holds for a *first* ingest (the adapter
+#      filters `seiyaku`), and breaks precisely when reconcile does its job:
+#      it updates tenancy_status on a row we already hold, and nothing read it.
+#      302 already-let rentals were publicly searchable as a result.
+#   3. Is it still plausibly available?  -> posted_at (age)
+#      Neither column above is trustworthy on a fresh listing, because upstream
+#      learns of a 成約 late: measured against the 成約 records, 8.4% of rentals
+#      are already contracted within 7 days of being posted, and ~12% of rentals
+#      contracted 3-4 months ago are STILL carried upstream as 広告可. We do not
+#      do 物件確認, so age is the only remaining lever — see the window constants.
 ADVERTISABLE_RENTAL_AD_STATUS = "可"
 ADVERTISABLE_SALE_AD_STATUSES = ("広告可", "広告可(但し要連絡)")
 OFF_MARKET_SALE_STATUSES = ("成約", "申込あり")
+OFF_MARKET_RENTAL_STATUSES = ("成約済",)
+
+# Visibility window, measured from the upstream posting date.
+#
+# Rentals move fast (median 11 days on market, 10% gone within 24h), so the
+# window is what keeps the site from advertising flats that are already let.
+# Measured おとり rate by window, against the 成約 records: 1d 3.6%, 3d 6.0%,
+# 7d 8.4%, 30d 13.3%, 90d 15.5%. There is a floor around 3.6% that no window
+# can beat — that part needs 物件確認, which is out of scope by decision.
+#
+# Sale is a different regime: `transaction_status` upstream is well maintained
+# (1 off-market row in the whole advertisable pool) and every ad-cleared sale
+# row was updated within 90 days anyway, so the window costs no inventory. It
+# is here as a backstop against a stalled sync, not as a freshness filter.
+RENTAL_VISIBLE_DAYS = 7
+SALE_VISIBLE_DAYS = 90
+
+# The window applies to synced inventory only. A broker's own listing has no
+# upstream clock and is withdrawn by the broker, so expiring it after a week
+# would quietly delete that broker's shopfront.
+WINDOWED_SOURCE = "pg"
 
 # Written by the reconcile pass when a listing we hold is no longer offered
 # upstream at all (the row vanished). It is deliberately in neither
@@ -142,25 +178,65 @@ OFF_MARKET_SALE_STATUSES = ("成約", "申込あり")
 RETIRED_AD_STATUS = "掲載終了"
 
 
+def visible_days(transaction_type: str | None) -> int:
+    return SALE_VISIBLE_DAYS if (transaction_type or "") == "sale" else RENTAL_VISIBLE_DAYS
+
+
+def window_start(transaction_type: str | None, now: datetime | None = None) -> str:
+    """The oldest ``posted_at`` still inside the visibility window, as the same
+    UTC ``...Z`` string shape the column stores, so SQL can compare textually."""
+    now = now or datetime.now(timezone.utc)
+    start = now - timedelta(days=visible_days(transaction_type))
+    return start.strftime("%Y-%m-%dT%H:%M:%S.") + f"{start.microsecond // 1000:03d}Z"
+
+
+def is_fresh(
+    transaction_type: str | None,
+    posted_at: str | None,
+    source: str | None,
+    now: datetime | None = None,
+) -> bool:
+    """Whether a listing is still inside its visibility window.
+
+    Locally-created inventory is always fresh — it has no upstream posting date
+    and is withdrawn by its broker. Synced inventory with no posting date fails
+    closed: an unknown age is exactly the case the window exists to catch, and
+    every row from a completed sync carries one.
+    """
+    if (source or "") != WINDOWED_SOURCE:
+        return True
+    if not posted_at:
+        return False
+    return posted_at >= window_start(transaction_type, now)
+
+
 def is_advertisable(
     transaction_type: str | None,
     ad_status: str | None,
     tenancy_status: str | None,
+    posted_at: str | None,
+    source: str | None,
+    now: datetime | None = None,
 ) -> bool:
     """Whether a listing may appear on the public surface (search results, the
     /listings/<id> page, forum-post attachments). Internal/keyed lookups bypass
     this; it's the deterministic mirror of the WHERE-clause gate.
 
-    ``tenancy_status`` is required rather than defaulting: a caller that forgot
-    it would fail *open* on a legal gate (おとり広告), so the type checker and
-    the call site should both have to think about it.
+    Every axis is a required argument rather than a defaulted one: a caller that
+    forgot one would fail *open* on a legal gate (おとり広告), so the type checker
+    and the call site should both have to think about it.
     """
+    if not is_fresh(transaction_type, posted_at, source, now):
+        return False
     if (transaction_type or "") == "sale":
         return (
             ad_status in ADVERTISABLE_SALE_AD_STATUSES
             and (tenancy_status or "") not in OFF_MARKET_SALE_STATUSES
         )
-    return ad_status == ADVERTISABLE_RENTAL_AD_STATUS
+    return (
+        ad_status == ADVERTISABLE_RENTAL_AD_STATUS
+        and (tenancy_status or "") not in OFF_MARKET_RENTAL_STATUSES
+    )
 
 
 def is_listing_advertisable(listing_id: int, conn: sqlite3.Connection | None = None) -> bool:
@@ -170,13 +246,15 @@ def is_listing_advertisable(listing_id: int, conn: sqlite3.Connection | None = N
         conn = connect()
     try:
         row = conn.execute(
-            "SELECT transaction_type, ad_status, tenancy_status FROM listings WHERE id = ?",
+            "SELECT transaction_type, ad_status, tenancy_status, posted_at, source "
+            "FROM listings WHERE id = ?",
             (listing_id,),
         ).fetchone()
         if row is None:
             return False
         return is_advertisable(
-            row["transaction_type"], row["ad_status"], row["tenancy_status"]
+            row["transaction_type"], row["ad_status"], row["tenancy_status"],
+            row["posted_at"], row["source"],
         )
     finally:
         if owns_conn:
@@ -347,15 +425,34 @@ def _build_search_where(criteria: dict[str, Any]) -> tuple[str, list[Any], str]:
     elif _tt in ("rental", "rent", "chintai", "賃貸"):
         where.append("COALESCE(listings.transaction_type,'') != 'sale'")
 
-    # On-market gate for sale rows: 成約 / 申込あり are off the market and must
-    # never be surfaced (legally important: avoids おとり広告). Always applied;
-    # rental / other rows are unaffected. See is_advertisable() for why this is
-    # NOT "= 公開中". Built from the module constants so the SQL and the
-    # predicate cannot drift apart.
-    _off = ",".join("?" * len(OFF_MARKET_SALE_STATUSES))
-    where.append(f"(COALESCE(listings.transaction_type,'') != 'sale' "
-                 f"OR COALESCE(listings.tenancy_status,'') NOT IN ({_off}))")
+    # On-market gate: contracted / spoken-for rows must never be surfaced
+    # (legally important: avoids おとり広告). Always applied, to both kinds —
+    # sale says 成約 / 申込あり, rental says 成約済. Built from the module
+    # constants so the SQL and the predicate cannot drift apart.
+    _off_s = ",".join("?" * len(OFF_MARKET_SALE_STATUSES))
+    _off_r = ",".join("?" * len(OFF_MARKET_RENTAL_STATUSES))
+    where.append(
+        f"(CASE WHEN COALESCE(listings.transaction_type,'') = 'sale' "
+        f"THEN COALESCE(listings.tenancy_status,'') NOT IN ({_off_s}) "
+        f"ELSE COALESCE(listings.tenancy_status,'') NOT IN ({_off_r}) END)"
+    )
     params.extend(OFF_MARKET_SALE_STATUSES)
+    params.extend(OFF_MARKET_RENTAL_STATUSES)
+
+    # Visibility window on synced inventory: a listing older than its window is
+    # no longer plausibly available, and we do not do 物件確認. Locally-created
+    # rows (source IS NULL) have no upstream clock and never expire; a synced
+    # row with no posting date fails closed. See is_fresh().
+    if not criteria.get("include_stale"):
+        where.append(
+            f"(COALESCE(listings.source,'') != ? OR "
+            f" (listings.posted_at IS NOT NULL AND listings.posted_at >= "
+            f"  CASE WHEN COALESCE(listings.transaction_type,'') = 'sale' "
+            f"  THEN ? ELSE ? END))"
+        )
+        params.append(WINDOWED_SOURCE)
+        params.append(window_start("sale"))
+        params.append(window_start("rent"))
 
     # Advertising-compliance gate for the public surface. Both kinds carry the
     # source verdict in ad_status, but with different vocabularies: rental is

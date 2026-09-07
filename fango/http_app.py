@@ -815,7 +815,9 @@ def _register_routes(app: FastAPI) -> None:
         # non-existent listing.
         if not ls.is_advertisable(listing.extra.get("transaction_type"),
                                   listing.extra.get("ad_status"),
-                                  listing.extra.get("tenancy_status")):
+                                  listing.extra.get("tenancy_status"),
+                                  listing.extra.get("posted_at"),
+                                  listing.extra.get("source")):
             raise HTTPException(status_code=404, detail="listing not found")
         # Single thumbnail only — the first raw image. No gallery, no
         # processed crops, no shuhen tour.
@@ -1455,10 +1457,11 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
 _MAX_TOPIC_LISTINGS = 3  # how many proposed listings a topic row shows when photo-less
 
 # A listing is shown (as a card, chip, or its photo as a topic thumbnail) only
-# when it's "live" — the same two axes as service.is_advertisable: cleared for
-# advertising, and (sale only) still on the market. Kept identical for the
-# topic row (outside) and the thread card (inside) so they never disagree
-# (e.g. a photo outside but nothing inside). Uses table alias ``l``.
+# when it's "live" — the same axes as service.is_advertisable: cleared for
+# advertising, not contracted, and (synced rows) still inside its visibility
+# window. Kept identical for the topic row (outside) and the thread card
+# (inside) so they never disagree (e.g. a photo outside but nothing inside).
+# Uses table alias ``l``.
 #
 # These queries interpolate rather than bind (they are built into larger
 # f-strings with their own params), so the clause is GENERATED from the
@@ -1469,13 +1472,26 @@ def _sql_literal_list(values: tuple[str, ...]) -> str:
     return ",".join("'" + v.replace("'", "''") + "'" for v in values)
 
 
-_VISIBLE_LISTING_SQL = (
-    "((COALESCE(l.transaction_type,'') = 'sale'"
-    f" AND l.ad_status IN ({_sql_literal_list(ls.ADVERTISABLE_SALE_AD_STATUSES)})"
-    f" AND COALESCE(l.tenancy_status,'') NOT IN ({_sql_literal_list(ls.OFF_MARKET_SALE_STATUSES)}))"
-    " OR (COALESCE(l.transaction_type,'') != 'sale'"
-    f" AND l.ad_status = '{ls.ADVERTISABLE_RENTAL_AD_STATUS}'))"
-)
+def _q(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _visible_listing_sql() -> str:
+    """Built per call, not once at import: the window edge moves with the clock,
+    and a module-level constant would freeze it at process start — a long-lived
+    uvicorn would keep showing listings past their expiry."""
+    return (
+        "((COALESCE(l.transaction_type,'') = 'sale'"
+        f" AND l.ad_status IN ({_sql_literal_list(ls.ADVERTISABLE_SALE_AD_STATUSES)})"
+        f" AND COALESCE(l.tenancy_status,'') NOT IN ({_sql_literal_list(ls.OFF_MARKET_SALE_STATUSES)}))"
+        " OR (COALESCE(l.transaction_type,'') != 'sale'"
+        f" AND l.ad_status = {_q(ls.ADVERTISABLE_RENTAL_AD_STATUS)}"
+        f" AND COALESCE(l.tenancy_status,'') NOT IN ({_sql_literal_list(ls.OFF_MARKET_RENTAL_STATUSES)})))"
+        f" AND (COALESCE(l.source,'') != {_q(ls.WINDOWED_SOURCE)}"
+        "      OR (l.posted_at IS NOT NULL AND l.posted_at >="
+        "          CASE WHEN COALESCE(l.transaction_type,'') = 'sale'"
+        f"          THEN {_q(ls.window_start('sale'))} ELSE {_q(ls.window_start('rent'))} END))"
+    )
 
 
 def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
@@ -1511,13 +1527,13 @@ def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
                       JOIN listing_images li ON li.listing_id = r.listing_id
                       JOIN listings l ON l.id = r.listing_id
                       JOIN posts p ON p.id = r.post_id
-                      WHERE p.thread_id = t.id AND li.kind = 'raw' AND {_VISIBLE_LISTING_SQL}
+                      WHERE p.thread_id = t.id AND li.kind = 'raw' AND {_visible_listing_sql()}
                       ORDER BY p.id, li.sort_order LIMIT 1) AS li_lid,
                    (SELECT li.sort_order FROM post_listing_refs r
                       JOIN listing_images li ON li.listing_id = r.listing_id
                       JOIN listings l ON l.id = r.listing_id
                       JOIN posts p ON p.id = r.post_id
-                      WHERE p.thread_id = t.id AND li.kind = 'raw' AND {_VISIBLE_LISTING_SQL}
+                      WHERE p.thread_id = t.id AND li.kind = 'raw' AND {_visible_listing_sql()}
                       ORDER BY p.id, li.sort_order LIMIT 1) AS li_sort
                FROM threads t {join}
                WHERE {where}
@@ -1535,8 +1551,8 @@ def _forum_feed(forum: str, tag: str | None = None) -> list[dict]:
                JOIN posts p ON p.id = r.post_id
                JOIN listings l ON l.id = r.listing_id
                JOIN threads t ON t.id = p.thread_id
-               WHERE t.forum = ? AND {_VISIBLE_LISTING_SQL}
-               ORDER BY p.thread_id, p.id, r.id""".format(_VISIBLE_LISTING_SQL=_VISIBLE_LISTING_SQL),
+               WHERE t.forum = ? AND {gate}
+               ORDER BY p.thread_id, p.id, r.id""".format(gate=_visible_listing_sql()),
             (forum,),
         ).fetchall()
     finally:
@@ -1624,7 +1640,7 @@ def _resolve_listing_refs(post_ids: list[int]) -> dict[int, list]:
                        l.address, l.structure
                 FROM post_listing_refs r
                 JOIN listings l ON l.id = r.listing_id
-                WHERE r.post_id IN ({placeholders}) AND {_VISIBLE_LISTING_SQL}""",
+                WHERE r.post_id IN ({placeholders}) AND {_visible_listing_sql()}""",
             post_ids,
         ).fetchall()
         # First raw photo per referenced listing → a card thumbnail. Most rows

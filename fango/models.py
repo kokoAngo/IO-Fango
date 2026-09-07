@@ -115,6 +115,10 @@ class Listing:
             "structure", "direction", "parking", "pet_allowed",
             "renovation", "listing_type", "transaction_type",
             "agent_company", "ad_status", "raw_json", "last_seen_at",
+            # The advertising gate reads these off `extra` on the detail page,
+            # so a Listing that does not carry them fails closed for every
+            # synced row — i.e. a 404 on the whole ingested inventory.
+            "posted_at", "source",
         )
         extra = {k: _row(row, k) for k in extra_keys}
         return cls(

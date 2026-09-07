@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS listings (
     agent_company       TEXT,
     broker_agent_id     INTEGER REFERENCES agents(id),  -- owning broker (NULL = central/ingested 在庫)
     source              TEXT,   -- 'pg' = synced from the upstream inventory DB; NULL = created here
+    posted_at           TEXT,   -- upstream posting date (UTC 'Z'); drives the visibility window
     ad_status           TEXT,   -- source 「広告可」: 可/おすすめ/不可（…）/確認待ち/-- etc.
     raw_json            TEXT,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

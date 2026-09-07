@@ -6,6 +6,8 @@ dry-run/write split) without a database on the other end.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from fango.listings import service as ls
@@ -241,10 +243,14 @@ def gate_stub(monkeypatch):
 
 
 def _seed_pg_listing(reins_id, **over):
+    _now = datetime.now(timezone.utc)
     payload = {
         "reins_id": reins_id, "building_name": reins_id, "prefecture": "東京都",
         "city": "港区", "layout": "1LDK", "rent_yen": 150_000,
         "transaction_type": "rent", "ad_status": "可", "source": "pg",
+        # Synced rows are subject to the visibility window; without a posting
+        # date they fail closed and nothing would be visible to assert on.
+        "posted_at": _now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{_now.microsecond // 1000:03d}Z",
     }
     payload.update(over)
     return ls.insert_listing(payload)

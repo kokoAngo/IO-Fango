@@ -194,10 +194,16 @@ def list_listings(
     offset: int = 0,
     conn: sqlite3.Connection | None = None,
 ) -> list:
-    """A broker's own inventory, including non-advertisable (draft/held) rows."""
+    """A broker's own inventory, including rows the public surface hides.
+
+    Both bypasses are deliberate: this is the broker's management view, so a
+    held/draft row (non-advertisable) and a synced row that has aged out of its
+    visibility window must both still be listed — a broker needs to see the
+    inventory it owns, not just the slice customers can currently reach."""
     from ..listings import service as svc
     return svc.search_listings(
-        criteria={"broker_agent_id": broker_agent_id, "include_non_advertisable": True},
+        criteria={"broker_agent_id": broker_agent_id,
+                  "include_non_advertisable": True, "include_stale": True},
         limit=limit,
         offset=offset,
         conn=conn,

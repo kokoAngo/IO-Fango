@@ -37,7 +37,7 @@ from fango.db import bootstrap, connect
 from fango.listings.ingestion.postgres import SOURCE_PG
 
 # Bumped when the artifact layout changes in a way the importer must notice.
-ARTIFACT_VERSION = 1
+ARTIFACT_VERSION = 2
 
 # Columns that travel. Deliberately not "everything": `id` is local to each
 # database (the app server has its own autoincrement, and reins_id is the key
@@ -52,6 +52,7 @@ EXPORT_COLUMNS = (
     "structure", "floor", "total_floors", "direction", "parking",
     "pet_allowed", "renovation", "listing_type", "transaction_type",
     "url", "agent_company", "ad_status", "raw_json", "last_seen_at", "source",
+    "posted_at",
 )
 
 

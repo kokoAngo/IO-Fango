@@ -7,6 +7,8 @@ belongs to the receiving environment gets clobbered).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import gzip
 import io
 import json
@@ -41,12 +43,19 @@ def artifact_env(tmp_path, tmp_db, monkeypatch):
     return {"root": root, "uploads": up, "out": tmp_path / "artifact", "tmp": tmp_path}
 
 
+def _now_iso() -> str:
+    t = datetime.now(timezone.utc)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+
 def _make_source_listing(env, reins_id="100000000001", with_photo=True):
     listing = ls.insert_listing({
         "reins_id": reins_id, "building_name": "テスト物件", "prefecture": "東京都",
         "city": "港区", "ward": "港区", "layout": "2LDK", "price_man": 8000,
         "transaction_type": "sale", "ad_status": "広告可", "tenancy_status": "-",
-        "source": "pg",
+        # source='pg' rows are subject to the visibility window, so a fixture
+        # without a posting date would be invisible on both sides of the trip.
+        "source": "pg", "posted_at": _now_iso(),
     })
     ls.replace_transports(listing.id, [
         {"line": "日比谷線", "station": "六本木", "walk_minutes": 3, "sort_order": 0},
