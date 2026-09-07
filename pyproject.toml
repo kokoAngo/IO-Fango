@@ -39,6 +39,12 @@ identity = [
     "eth-account>=0.10",
     "cryptography>=41",
 ]
+# Upstream inventory Postgres ingest (fango/listings/ingestion/postgres.py).
+# Optional: without it the Postgres adapter logs and yields nothing; the app
+# still runs entirely off SQLite.
+pg = [
+    "psycopg[binary]>=3.1",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

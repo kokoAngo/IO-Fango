@@ -109,6 +109,31 @@ def load_settings() -> Settings:
 
 
 @dataclass(frozen=True)
+class PgSettings:
+    """Upstream inventory Postgres (賃貸 main.* / 売買 baibai.*).
+
+    Read-only and LAN-only: the DSN must name a role with SELECT and nothing
+    else. Unconfigured ⇒ the Postgres ingest adapter yields nothing and the
+    rest of the app is unaffected (SQLite stays the runtime store)."""
+
+    dsn: str | None
+    statement_timeout_ms: int
+
+    def is_configured(self) -> bool:
+        return bool(self.dsn)
+
+
+def load_pg_settings() -> PgSettings:
+    return PgSettings(
+        dsn=os.environ.get("FANGO_PG_DSN") or None,
+        # A full rental sweep is ~350k rows; the per-statement ceiling is
+        # generous but still bounded so a stuck sync can't pin an upstream
+        # backend indefinitely.
+        statement_timeout_ms=int(os.environ.get("FANGO_PG_STATEMENT_TIMEOUT_MS", "600000")),
+    )
+
+
+@dataclass(frozen=True)
 class ConsultSettings:
     api_key: str | None
     model: str
