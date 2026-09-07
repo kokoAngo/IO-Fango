@@ -80,6 +80,41 @@ history rather than this file.
 - [ ] Pillow `Image.getdata()` deprecation (gone in Pillow 14, 2027-10-15)
       — swap for `get_flattened_data()` in `fango/listings/tools.py:_phash`.
 
+## Real inventory sync (upstream PG → production)
+
+Built 2026-09-04: the ingest, the photo fetcher, the two-axis ad gate, and the
+artifact export/import are all in place and covered by tests. Locally the DB
+holds 58,717 upstream listings (57,286 rent / 1,431 sale) and 2,225 photo files.
+Architecture and the traps live in `deploy/README.md` ("Keeping the inventory in
+sync"). What is left is everything downstream of "it works on the LAN machine".
+
+- [ ] **Deliver leg is an empty hook.** `sync_inventory.sh` ends at
+      `FANGO_SYNC_DELIVER`, unset, so the artifact just sits in `data/sync/`.
+      The blocker is that `ango-dev` is only an SSH alias on some deploy box —
+      it is NXDOMAIN from here and from nas/sonoda alike. Options: get the real
+      host/key for the app server, or relay through AWS `fango`
+      (public, reachable from the LAN machines).
+- [ ] **Production has never received real inventory.** After the first
+      delivery: `import_inventory --dry-run`, then for real, then
+      `assign_broker_inventory --broker-id 49 --per-ward 15` **twice** (once
+      with `--transaction-type sale`), then restart `fangoio`. Back up `data/`
+      first — the app server's SQLite also holds forum threads, agents,
+      agreements and escrow, none of which the artifact carries.
+- [ ] **No LAN machine runs this on a schedule.** Neither `nas` nor `sonoda`
+      has a checkout or the launchd job; today the only machine that has ever
+      run the pipeline is the laptop, which is on the LAN but not always on it.
+      Install `scripts/city.fango.inventory-sync.plist` somewhere that stays up.
+- [ ] **Rent listings have no photos.** The fetcher only covers the `baibai`
+      Garage bucket (1,302 sale listings with publishable pictures). Where 賃貸
+      photos live upstream is still unanswered.
+- [ ] **Reconcile is unproven at scale.** `--reconcile` re-reads the gate
+      columns for every held `source='pg'` row each cycle; against 58k rows
+      that is the slowest step and has only ever run on a fresh table. Watch
+      the first few cycles before trusting the schedule.
+- [ ] **`fetch_listing_images` has no retention.** `data/uploads/` is
+      content-addressed and only ever grows; nothing prunes files whose
+      listings were retired (`ad_status='掲載終了'`).
+
 ## Backend features the README quietly promises but we don't yet do
 
 - [ ] **SSE push for saved-search matches**. Per-forum live feeds now exist, but
