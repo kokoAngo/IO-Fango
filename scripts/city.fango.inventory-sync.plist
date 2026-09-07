@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Inventory sync: upstream Postgres + photo bucket → SQLite → artifact.
+     Runs on a machine INSIDE the office LAN (the upstream database and the
+     photo bucket are not reachable from anywhere else).
+
+     Install:
+       cp scripts/city.fango.inventory-sync.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/city.fango.inventory-sync.plist
+     Run once now:  launchctl start city.fango.inventory-sync
+     Remove:        launchctl unload ~/Library/LaunchAgents/city.fango.inventory-sync.plist
+     Log:           /tmp/fango_inventory_sync.log
+
+     Edit WorkingDirectory / ProgramArguments to the checkout path on that
+     machine, and set FANGO_SYNC_DELIVER to the transport command. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>city.fango.inventory-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/geng/Project/FangoCity/scripts/sync_inventory.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/geng/Project/FangoCity</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Uncomment and fill in once the app server is reachable from here.
+    <key>FANGO_SYNC_DELIVER</key>
+    <string>rsync -az --delete "$ARTIFACT_DIR"/ user@app-server:/srv/fango-inventory/</string>
+    -->
+  </dict>
+  <!-- Every 6 hours. The upstream crawler writes continuously, but the
+       reconcile pass is the expensive half and hourly buys little. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+  <key>StandardOutPath</key>
+  <string>/tmp/fango_inventory_sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/fango_inventory_sync.log</string>
+</dict>
+</plist>

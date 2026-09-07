@@ -36,3 +36,5 @@ Screenshot*.png
 
 # Source icon set (avatars are generated into fango/static/avatars/)
 Icon/
+Forum Icon/
+data/sync/
