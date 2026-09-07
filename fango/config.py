@@ -134,6 +134,37 @@ def load_pg_settings() -> PgSettings:
 
 
 @dataclass(frozen=True)
+class S3Settings:
+    """Upstream photo bucket (Garage, S3-compatible, on the office LAN).
+
+    Read-only: the key must have READ and nothing else. Unconfigured ⇒ the
+    photo fetcher reports and does nothing; listings still ingest without
+    their photos."""
+
+    endpoint: str | None
+    bucket: str | None
+    region: str
+    access_key_id: str | None
+    secret_access_key: str | None
+
+    def is_configured(self) -> bool:
+        return bool(self.endpoint and self.bucket
+                    and self.access_key_id and self.secret_access_key)
+
+
+def load_s3_settings() -> S3Settings:
+    return S3Settings(
+        endpoint=os.environ.get("FANGO_S3_ENDPOINT") or None,
+        bucket=os.environ.get("FANGO_S3_BUCKET") or None,
+        # Garage's default region name; it is part of the signature scope, so
+        # it has to match what the server expects even though it means nothing.
+        region=os.environ.get("FANGO_S3_REGION", "garage"),
+        access_key_id=os.environ.get("FANGO_S3_ACCESS_KEY_ID") or None,
+        secret_access_key=os.environ.get("FANGO_S3_SECRET_ACCESS_KEY") or None,
+    )
+
+
+@dataclass(frozen=True)
 class ConsultSettings:
     api_key: str | None
     model: str
