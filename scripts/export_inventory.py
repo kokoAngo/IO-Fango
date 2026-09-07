@@ -34,6 +34,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from fango.db import bootstrap, connect
+from fango.listings import service as ls
 from fango.listings.ingestion.postgres import SOURCE_PG
 
 # Bumped when the artifact layout changes in a way the importer must notice.
@@ -66,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
                         "manifest 'watermark'.")
     p.add_argument("--no-photos", action="store_true",
                    help="Metadata only; skip copying photo files")
+    p.add_argument("--include-expired", action="store_true",
+                   help="Also ship rows that have aged out of the visibility "
+                        "window. Off by default: the receiving side applies the "
+                        "same window, so those rows can never be shown there.")
     args = p.parse_args(argv)
 
     # updated_at is stored as a UTC string ('...Z') and compared as a string.
@@ -89,6 +94,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.since:
             where += " AND updated_at >= ?"
             params.append(args.since)
+        if not args.include_expired:
+            # The receiving side runs the same window off the same posted_at,
+            # so an expired row would cross the wire only to be invisible on
+            # arrival. With a 7-day rental window this is the difference
+            # between shipping ~5k rows and shipping ~58k.
+            where += (" AND posted_at IS NOT NULL AND posted_at >= "
+                      "CASE WHEN COALESCE(transaction_type,'') = 'sale' THEN ? ELSE ? END")
+            params.append(ls.window_start("sale"))
+            params.append(ls.window_start("rent"))
 
         rows = conn.execute(
             f"SELECT id, {', '.join(EXPORT_COLUMNS)}, updated_at FROM listings "

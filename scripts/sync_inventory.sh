@@ -27,12 +27,19 @@ fail() { log "FAILED at: $*"; exit 1; }
 # The upstream rental table has no updated_at, only created_time, so the
 # incremental window is deliberately generous — cheap, and step 2 is what
 # actually catches mutations.
+#
+# With no watermark this does NOT sweep the whole upstream table. Nothing older
+# than the visibility window can ever be shown, so pulling 355k rentals to hide
+# 350k of them costs an hour and buys nothing. The floor is the widest window
+# in use (sale's, the longer of the two) so a first run still fills both kinds.
 SINCE_ARG=()
 if [ -f "$WATERMARK_FILE" ]; then
   SINCE_ARG=(--since "$(cat "$WATERMARK_FILE")")
   log "incremental since $(cat "$WATERMARK_FILE")"
 else
-  log "no watermark — full sweep"
+  FLOOR=$($PY -c "from fango.listings import service as ls; print(ls.window_start('sale'))")
+  SINCE_ARG=(--since "$FLOOR")
+  log "no watermark — seeding from the visibility window floor $FLOOR"
 fi
 
 log "1/4 ingest"
