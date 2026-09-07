@@ -7,10 +7,14 @@ in search and feed broker_propose_terms, and merges those wards into the broker'
 ``areas`` (so area-based routing fires for them too).
 
 ``--transaction-type`` picks which pool to draw from (default ``rental``):
-  * ``rental`` — non-sale rows that have a rent (``rent_yen``); marked ad_status='可'.
-  * ``sale``   — ``transaction_type='sale'`` rows that have a price (``price_man``);
-                 marked ad_status='公開中' (the on-market gate sale rows need to
-                 surface — '可' is the RENTAL gate and would leave sale rows hidden).
+  * ``rental`` — non-sale rows that have a rent (``rent_yen``).
+  * ``sale``   — ``transaction_type='sale'`` rows that have a price (``price_man``).
+
+The pool is restricted to rows that are ALREADY cleared for public advertising
+(the same predicate ``service.is_advertisable`` applies), and ad_status is left
+untouched. Assigning a listing to a broker says who owns it; it is not a
+judgement about whether the source cleared it for advertising, and rewriting
+ad_status to make an assignment "work" is おとり広告 on real inventory.
 
     # give broker 49 rental inventory (current default behaviour)
     python -m scripts.assign_broker_inventory --broker-id 49 --per-ward 15
@@ -23,9 +27,9 @@ and re-running with the same --per-ward is a no-op once each ward is full.
 Ward key = COALESCE(NULLIF(ward,''), city), so it works whether the ward name
 lives in the `ward` or the `city` column.
 
-NOTE: forcing an advertisable status presents these as advertisable. Fine for a
-prototype/simulation fleet; for real listings, only advertise ones that genuinely
-are (avoid おとり広告).
+``--force-ad-status`` restores the old behaviour of overwriting ad_status so
+any assigned row surfaces. That is for a prototype/simulation fleet on synthetic
+inventory ONLY — never point it at real listings.
 """
 from __future__ import annotations
 
@@ -41,6 +45,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from fango.brokers import service as bsvc
 from fango.db import bootstrap, connect
+from fango.listings.service import (
+    ADVERTISABLE_RENTAL_AD_STATUS,
+    ADVERTISABLE_SALE_AD_STATUSES,
+    OFF_MARKET_SALE_STATUSES,
+)
 
 _ADMIN_SUFFIX = re.compile(r"[都道府県区市町村]+$")
 _WARD = "COALESCE(NULLIF(listings.ward,''), listings.city)"
@@ -63,17 +72,39 @@ def main(argv: list[str] | None = None) -> int:
                     help="which pool to draw from (default rental)")
     ap.add_argument("--dry-run", action="store_true", help="show the plan, change nothing")
     ap.add_argument("--no-areas", action="store_true", help="don't touch the broker's areas")
+    ap.add_argument("--force-ad-status", action="store_true",
+                    help="Overwrite ad_status on the assigned rows so they surface even "
+                         "if the source never cleared them. SIMULATION FLEETS ONLY — on "
+                         "real inventory this is おとり広告.")
     args = ap.parse_args(argv)
 
-    # Type-specific candidate predicate + advertisable status. Sale rows surface
-    # only when ad_status='公開中' (on-market); rentals only when ad_status='可'
-    # (advertising cleared) — using the wrong gate leaves the assigned rows hidden.
+    # `type_where` identifies the transaction type (used for the idempotent
+    # per-ward count of what the broker already owns). `pool_where` narrows the
+    # candidates further to rows that are actually surfaceable — it mirrors the
+    # public gate in service._build_search_where, built from the same constants
+    # so the two cannot drift.
+    pool_params: list = []
     if args.transaction_type == "sale":
-        type_where = "COALESCE(listings.transaction_type,'') = 'sale' AND listings.price_man IS NOT NULL"
-        new_ad_status = "公開中"
+        type_where = ("COALESCE(listings.transaction_type,'') = 'sale' "
+                      "AND listings.price_man IS NOT NULL")
+        # 成約/申込あり is excluded even under --force-ad-status: an off-market
+        # listing is not a compliance preference, it is simply gone.
+        off = ",".join("?" * len(OFF_MARKET_SALE_STATUSES))
+        pool_where = f"{type_where} AND COALESCE(listings.tenancy_status,'') NOT IN ({off})"
+        pool_params += list(OFF_MARKET_SALE_STATUSES)
+        if not args.force_ad_status:
+            ok = ",".join("?" * len(ADVERTISABLE_SALE_AD_STATUSES))
+            pool_where += f" AND listings.ad_status IN ({ok})"
+            pool_params += list(ADVERTISABLE_SALE_AD_STATUSES)
+        new_ad_status = ADVERTISABLE_SALE_AD_STATUSES[0]
     else:  # rental
-        type_where = "COALESCE(listings.transaction_type,'') != 'sale' AND listings.rent_yen IS NOT NULL"
-        new_ad_status = "可"
+        type_where = ("COALESCE(listings.transaction_type,'') != 'sale' "
+                      "AND listings.rent_yen IS NOT NULL")
+        pool_where = type_where
+        if not args.force_ad_status:
+            pool_where += " AND listings.ad_status = ?"
+            pool_params.append(ADVERTISABLE_RENTAL_AD_STATUS)
+        new_ad_status = ADVERTISABLE_RENTAL_AD_STATUS
 
     bootstrap()
     conn = connect()
@@ -97,9 +128,10 @@ def main(argv: list[str] | None = None) -> int:
     by_ward: dict[str, list[int]] = {}
     for r in conn.execute(
         f"SELECT listings.id AS id, {_WARD} AS w FROM listings "
-        f"WHERE broker_agent_id IS NULL AND {type_where} "
+        f"WHERE broker_agent_id IS NULL AND {pool_where} "
         f"AND {_WARD} IS NOT NULL AND {_WARD} != '' "
-        f"ORDER BY w, listings.id"
+        f"ORDER BY w, listings.id",
+        pool_params,
     ).fetchall():
         by_ward.setdefault(r["w"], []).append(r["id"])
 
@@ -121,20 +153,27 @@ def main(argv: list[str] | None = None) -> int:
 
     # Wards the broker will cover after this (owned + newly assigned).
     covered = {_core(w) for w in owned} | {_core(w) for w, _, _ in plan}
+    ad_note = (f"OVERWRITING ad_status='{new_ad_status}'" if args.force_ad_status
+               else "ad_status untouched (pool is already advertisable)")
     if args.dry_run:
         print(f"\ndry-run: would assign {len(assign_ids)} {args.transaction_type} "
-              f"listing(s) (ad_status='{new_ad_status}'); "
-              f"areas would cover {len(covered)} ward(s).")
+              f"listing(s), {ad_note}; areas would cover {len(covered)} ward(s).")
         return 0
 
     for chunk in _chunks(assign_ids):
         ph = ",".join("?" * len(chunk))
-        conn.execute(
-            f"UPDATE listings SET broker_agent_id = ?, ad_status = ? WHERE id IN ({ph})",
-            [args.broker_id, new_ad_status, *chunk],
-        )
+        if args.force_ad_status:
+            conn.execute(
+                f"UPDATE listings SET broker_agent_id = ?, ad_status = ? WHERE id IN ({ph})",
+                [args.broker_id, new_ad_status, *chunk],
+            )
+        else:
+            conn.execute(
+                f"UPDATE listings SET broker_agent_id = ? WHERE id IN ({ph})",
+                [args.broker_id, *chunk],
+            )
     print(f"assigned {len(assign_ids)} {args.transaction_type} listing(s) → "
-          f"broker {args.broker_id} (ad_status='{new_ad_status}')")
+          f"broker {args.broker_id}; {ad_note}")
 
     if not args.no_areas:
         existing = set(bsvc.get_broker(args.broker_id, conn=conn)["areas"])

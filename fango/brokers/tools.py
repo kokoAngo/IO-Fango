@@ -108,9 +108,10 @@ def register(mcp) -> None:
             listing: Field map. Common keys: building_name, address, prefecture,
                 city, ward, station, walk_minutes, layout, area_sqm, price_man
                 (売買), rent_yen (賃貸), built_year, transaction_type ('sale' or
-                leave blank for rent), ad_status. For a listing to be routable to
-                customers it must clear the advertising gate (rental ad_status
-                '可', sale ad_status '公開中').
+                leave blank for rent), ad_status, tenancy_status. For a listing
+                to be routable to customers it must clear the advertising gate:
+                rental ad_status '可'; sale ad_status '広告可' (or
+                '広告可(但し要連絡)') and tenancy_status not '成約'/'申込あり'.
             listing_id: Omit to insert; pass an existing id (that you own) to
                 update. Updating a listing you don't own is rejected.
         """

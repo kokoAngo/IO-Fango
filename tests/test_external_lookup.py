@@ -174,7 +174,7 @@ class TestBlockFallback:
         _, post_id = a_post
         monkeypatch.setenv("FANGO_EXTERNAL_LOOKUP_ENABLED", "1")
         sale = listing_factory(building_name="売マンションX", transaction_type="sale",
-                               listing_type="sale", ad_status="公開中", price_man=6000)
+                               listing_type="sale", ad_status="広告可", price_man=6000)
         seen = {}
         def fake_find_listings(names, kind="rent"):
             seen["kind"] = kind

@@ -204,8 +204,11 @@ def _prop(props: dict, name: str):
 def _page_to_sale_record(page: dict[str, Any]) -> dict[str, Any] | None:
     """Map a 売買 Notion page → a listings payload (transaction_type='sale').
 
-    All statuses are ingested; the 取引状況 verdict lands on ``ad_status`` so
-    only 公開中 ones are surfaced at search time."""
+    All statuses are ingested. 取引状況 lands on ``tenancy_status`` (on-market
+    state), NOT on ``ad_status`` — ad_status means 広告転載可否, and this Notion
+    database carries no such field. Sale rows from here therefore have unknown
+    ad clearance and stay off the public surface until a source that knows
+    (the upstream Postgres) fills it in. See service.is_advertisable."""
     props = page.get("properties") or {}
 
     def g(name: str):
@@ -250,7 +253,7 @@ def _page_to_sale_record(page: dict[str, Any]) -> dict[str, Any] | None:
         "built_year": built_year,
         "structure": g("物件種目") or g("物件種別"),
         "agent_company": g("業者名"),
-        "ad_status": g("取引状況"),            # 公開中 / 申込あり / 一時停止 / -
+        "tenancy_status": g("取引状況"),       # 公開中 / 申込あり / 一時停止 / -
         "listing_type": "sale",
         "transaction_type": "sale",
         "url": None,

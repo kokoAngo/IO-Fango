@@ -35,7 +35,7 @@ LISTING_COLUMNS = (
     "structure", "floor", "total_floors", "direction", "parking",
     "pet_allowed", "renovation", "listing_type", "transaction_type",
     "url", "agent_company", "ad_status", "raw_json", "last_seen_at",
-    "broker_agent_id",
+    "broker_agent_id", "source",
 )
 
 # Whitelisted sort options for search_listings().
@@ -113,18 +113,53 @@ def upsert_listing(payload: dict[str, Any], conn: sqlite3.Connection | None = No
             conn.close()
 
 
-# Public-advertising gate. Keep in sync with the SQL in _build_search_where:
-# rental rows are cleared only when 広告可 = 可; sale rows only when 取引状況 = 公開中.
+# Public-advertising gate. Keep in sync with the SQL in _build_search_where.
+#
+# Two independent questions, and upstream answers them in two different
+# columns — conflating them is how a listing the broker refused advertising on
+# ends up on a public page:
+#
+#   1. May we advertise it?  -> ad_status
+#      Rental: 広告可 (可 / 不可（仲介） / 確認待ち / 物件による / --).
+#      Sale:   広告転載可否 (広告可 / 広告可(但し要連絡) / 一部可(…) / 不可).
+#      「但し要連絡」 means the listing broker wants a call before the ad runs,
+#      not that the ad is refused, so it clears. 一部可（…） is media-scoped
+#      (チラシ・新聞広告 etc.) and is NOT a blanket web clearance, so it does not.
+#   2. Is it still on the market?  -> tenancy_status
+#      Sale: 取引状況. Only 成約 / 申込あり take a row off-market; the bulk of
+#      the inventory sits at "-", which means "not posted to a portal", not
+#      "sold" — gating on 公開中 would hide ~88% of live, ad-cleared listings.
+#      Rental rows express this by not being ingested once 成約 (see the
+#      Postgres adapter), so this axis is sale-only.
 ADVERTISABLE_RENTAL_AD_STATUS = "可"
-ADVERTISABLE_SALE_AD_STATUS = "公開中"
+ADVERTISABLE_SALE_AD_STATUSES = ("広告可", "広告可(但し要連絡)")
+OFF_MARKET_SALE_STATUSES = ("成約", "申込あり")
+
+# Written by the reconcile pass when a listing we hold is no longer offered
+# upstream at all (the row vanished). It is deliberately in neither
+# advertisable set, so it fails closed. Distinct from the broker-initiated
+# 不可（取り下げ） so the two reasons stay tellable apart.
+RETIRED_AD_STATUS = "掲載終了"
 
 
-def is_advertisable(transaction_type: str | None, ad_status: str | None) -> bool:
+def is_advertisable(
+    transaction_type: str | None,
+    ad_status: str | None,
+    tenancy_status: str | None,
+) -> bool:
     """Whether a listing may appear on the public surface (search results, the
     /listings/<id> page, forum-post attachments). Internal/keyed lookups bypass
-    this; it's the deterministic mirror of the WHERE-clause gate."""
+    this; it's the deterministic mirror of the WHERE-clause gate.
+
+    ``tenancy_status`` is required rather than defaulting: a caller that forgot
+    it would fail *open* on a legal gate (おとり広告), so the type checker and
+    the call site should both have to think about it.
+    """
     if (transaction_type or "") == "sale":
-        return ad_status == ADVERTISABLE_SALE_AD_STATUS
+        return (
+            ad_status in ADVERTISABLE_SALE_AD_STATUSES
+            and (tenancy_status or "") not in OFF_MARKET_SALE_STATUSES
+        )
     return ad_status == ADVERTISABLE_RENTAL_AD_STATUS
 
 
@@ -135,11 +170,14 @@ def is_listing_advertisable(listing_id: int, conn: sqlite3.Connection | None = N
         conn = connect()
     try:
         row = conn.execute(
-            "SELECT transaction_type, ad_status FROM listings WHERE id = ?", (listing_id,)
+            "SELECT transaction_type, ad_status, tenancy_status FROM listings WHERE id = ?",
+            (listing_id,),
         ).fetchone()
         if row is None:
             return False
-        return is_advertisable(row["transaction_type"], row["ad_status"])
+        return is_advertisable(
+            row["transaction_type"], row["ad_status"], row["tenancy_status"]
+        )
     finally:
         if owns_conn:
             conn.close()
@@ -309,21 +347,31 @@ def _build_search_where(criteria: dict[str, Any]) -> tuple[str, list[Any], str]:
     elif _tt in ("rental", "rent", "chintai", "賃貸"):
         where.append("COALESCE(listings.transaction_type,'') != 'sale'")
 
-    # Sale (売買) listings are only recommended while 取引状況 = 公開中 (on-market),
-    # so we never surface 成約済み / 申込あり / 一時停止 ones (legally important:
-    # avoids おとり広告). Always applied; rental / other rows are unaffected.
-    where.append("(COALESCE(listings.transaction_type,'') != 'sale' "
-                 "OR listings.ad_status = '公開中')")
+    # On-market gate for sale rows: 成約 / 申込あり are off the market and must
+    # never be surfaced (legally important: avoids おとり広告). Always applied;
+    # rental / other rows are unaffected. See is_advertisable() for why this is
+    # NOT "= 公開中". Built from the module constants so the SQL and the
+    # predicate cannot drift apart.
+    _off = ",".join("?" * len(OFF_MARKET_SALE_STATUSES))
+    where.append(f"(COALESCE(listings.transaction_type,'') != 'sale' "
+                 f"OR COALESCE(listings.tenancy_status,'') NOT IN ({_off}))")
+    params.extend(OFF_MARKET_SALE_STATUSES)
 
-    # Advertising-compliance gate for the public surface: rental rows carry the
-    # source 「広告可」 verdict in ad_status, and only 可 is cleared for public
-    # advertising. Everything else (不可 / 確認待ち / 物件による / -- / unknown) is
-    # held back. Internal callers that legitimately need the full pool pass
-    # criteria['include_non_advertisable'] = True. Sale rows are governed by the
-    # 公開中 clause above, so this only constrains non-sale rows.
+    # Advertising-compliance gate for the public surface. Both kinds carry the
+    # source verdict in ad_status, but with different vocabularies: rental is
+    # 広告可=可, sale is 広告転載可否∈(広告可, 広告可(但し要連絡)). Everything else
+    # (不可 / 確認待ち / 物件による / 一部可 / -- / unknown) is held back. Internal
+    # callers that legitimately need the full pool pass
+    # criteria['include_non_advertisable'] = True.
     if not criteria.get("include_non_advertisable"):
-        where.append("(COALESCE(listings.transaction_type,'') = 'sale' "
-                     "OR listings.ad_status = '可')")
+        _sale_ok = ",".join("?" * len(ADVERTISABLE_SALE_AD_STATUSES))
+        where.append(
+            f"(CASE WHEN COALESCE(listings.transaction_type,'') = 'sale' "
+            f"THEN listings.ad_status IN ({_sale_ok}) "
+            f"ELSE listings.ad_status = ? END)"
+        )
+        params.extend(ADVERTISABLE_SALE_AD_STATUSES)
+        params.append(ADVERTISABLE_RENTAL_AD_STATUS)
 
     where_sql = " AND ".join(where) if where else ""
     return where_sql, params, join

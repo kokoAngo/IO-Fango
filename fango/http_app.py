@@ -809,11 +809,13 @@ def _register_routes(app: FastAPI) -> None:
         if bundle is None:
             raise HTTPException(status_code=404, detail="listing not found")
         listing = bundle["listing"]
-        # Advertising-compliance gate: non-advertisable rows (広告可 ≠ 可, or a
-        # sale not 公開中) must not have a public page. 404 rather than 403 so the
-        # page is indistinguishable from a non-existent listing.
+        # Advertising-compliance gate: non-advertisable rows (rental 広告可 ≠ 可,
+        # sale 広告転載不可 or already 成約/申込あり) must not have a public page.
+        # 404 rather than 403 so the page is indistinguishable from a
+        # non-existent listing.
         if not ls.is_advertisable(listing.extra.get("transaction_type"),
-                                  listing.extra.get("ad_status")):
+                                  listing.extra.get("ad_status"),
+                                  listing.extra.get("tenancy_status")):
             raise HTTPException(status_code=404, detail="listing not found")
         # Single thumbnail only — the first raw image. No gallery, no
         # processed crops, no shuhen tour.
@@ -1453,12 +1455,26 @@ def _recent_posts_in_forum(forum: str, limit: int = 30) -> list[dict]:
 _MAX_TOPIC_LISTINGS = 3  # how many proposed listings a topic row shows when photo-less
 
 # A listing is shown (as a card, chip, or its photo as a topic thumbnail) only
-# when it's "live": sale → 取引状況 公開中; rental → 広告可 可. Kept identical for
-# the topic row (outside) and the thread card (inside) so they never disagree
+# when it's "live" — the same two axes as service.is_advertisable: cleared for
+# advertising, and (sale only) still on the market. Kept identical for the
+# topic row (outside) and the thread card (inside) so they never disagree
 # (e.g. a photo outside but nothing inside). Uses table alias ``l``.
+#
+# These queries interpolate rather than bind (they are built into larger
+# f-strings with their own params), so the clause is GENERATED from the
+# service constants instead of being a third hand-written copy of the gate —
+# the hand-written copy is exactly what went stale when the sale gate moved
+# off 取引状況 = 公開中.
+def _sql_literal_list(values: tuple[str, ...]) -> str:
+    return ",".join("'" + v.replace("'", "''") + "'" for v in values)
+
+
 _VISIBLE_LISTING_SQL = (
-    "((COALESCE(l.transaction_type,'') = 'sale' AND l.ad_status = '公開中') "
-    "OR (COALESCE(l.transaction_type,'') != 'sale' AND l.ad_status = '可'))"
+    "((COALESCE(l.transaction_type,'') = 'sale'"
+    f" AND l.ad_status IN ({_sql_literal_list(ls.ADVERTISABLE_SALE_AD_STATUSES)})"
+    f" AND COALESCE(l.tenancy_status,'') NOT IN ({_sql_literal_list(ls.OFF_MARKET_SALE_STATUSES)}))"
+    " OR (COALESCE(l.transaction_type,'') != 'sale'"
+    f" AND l.ad_status = '{ls.ADVERTISABLE_RENTAL_AD_STATUS}'))"
 )
 
 

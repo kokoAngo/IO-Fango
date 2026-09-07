@@ -335,15 +335,17 @@ def attach_listing(post_id: int, listing_id: int, note: str | None = None,
         conn = connect()
     try:
         l = conn.execute(
-            "SELECT id, transaction_type, ad_status FROM listings WHERE id = ?",
+            "SELECT id, transaction_type, ad_status, tenancy_status "
+            "FROM listings WHERE id = ?",
             (listing_id,),
         ).fetchone()
         if l is None:
             raise ForumError(f"listing {listing_id} not found")
         # Public posts must never carry a non-advertisable listing — belt-and-
-        # suspenders behind the gated search (rental needs 広告可=可, sale 公開中).
+        # suspenders behind the gated search (rental needs 広告可=可; sale needs
+        # 広告転載可 and must not be 成約/申込あり).
         from .listings.service import is_advertisable
-        if not is_advertisable(l["transaction_type"], l["ad_status"]):
+        if not is_advertisable(l["transaction_type"], l["ad_status"], l["tenancy_status"]):
             raise ForumError(f"listing {listing_id} is not cleared for public advertising")
         cur = conn.execute(
             "INSERT OR IGNORE INTO post_listing_refs(post_id, listing_id, note) VALUES (?, ?, ?)",
