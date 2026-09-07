@@ -67,3 +67,32 @@ def test_local_inventory_never_ages_out_of_the_pool(tmp_db):
     _rent("OLDLOCAL", source=None, posted_at=None)
     assert assign(["--broker-id", str(broker.id), "--per-ward", "10"]) == 0
     assert _owned_names(broker.id) == {"OLDLOCAL"}
+
+
+def test_unshowable_holdings_do_not_count_toward_the_per_ward_target(tmp_db):
+    """A ward where the broker holds only dead stock must still be restocked.
+
+    Counting rows the gate rejects reads as "full" and leaves the shopfront
+    empty in exactly the ward the target was meant to cover.
+    """
+    broker, _ = bsvc.create_broker("b4", "テスト不動産")
+    # Two rows the broker already owns in 新宿区, neither of which can be shown.
+    _rent("DEAD1", broker_agent_id=broker.id, ad_status="不可（仲介）")
+    _rent("DEAD2", broker_agent_id=broker.id, posted_at=_ago(ls.RENTAL_VISIBLE_DAYS + 2))
+    _rent("LIVE")           # unowned and showable
+
+    assert assign(["--broker-id", str(broker.id), "--per-ward", "2"]) == 0
+
+    # The two dead rows did not fill the ward, so the live one was assigned.
+    assert "LIVE" in _owned_names(broker.id)
+
+
+def test_showable_holdings_do_count(tmp_db):
+    """The flip side: a ward already stocked with live inventory is left alone."""
+    broker, _ = bsvc.create_broker("b5", "テスト不動産")
+    _rent("HELD1", broker_agent_id=broker.id)
+    _rent("HELD2", broker_agent_id=broker.id)
+    _rent("SPARE")
+
+    assert assign(["--broker-id", str(broker.id), "--per-ward", "2"]) == 0
+    assert _owned_names(broker.id) == {"HELD1", "HELD2"}

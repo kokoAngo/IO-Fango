@@ -124,21 +124,32 @@ def main(argv: list[str] | None = None) -> int:
     pool_params.append(WINDOWED_SOURCE)
     pool_params.append(window_start("sale" if args.transaction_type == "sale" else "rent"))
 
+    # The same predicate, minus the "unowned" part, is what counts toward the
+    # per-ward target below. `pool_where` already carries the type clause.
+    showable_where, showable_params = pool_where, list(pool_params)
+
     bootstrap()
     conn = connect()
     if not bsvc.is_broker(args.broker_id, conn=conn):
         print(f"error: agent {args.broker_id} is not an active broker", file=sys.stderr)
         return 2
 
-    # How many of THIS type the broker already owns per ward (for idempotent
-    # top-up). Scoped to the type so a broker's existing rentals don't block a
-    # sale top-up (and vice-versa).
+    # How many of THIS type the broker already owns per ward that a customer
+    # could actually be shown (for idempotent top-up). Scoped to the type so a
+    # broker's existing rentals don't block a sale top-up (and vice-versa).
+    #
+    # Counting rows the public gate rejects would be worse than useless: a
+    # broker holding 15 withdrawn or aged-out listings in a ward reads as "full"
+    # and never gets restocked, so its shopfront stays empty in exactly the ward
+    # the target was supposed to cover. This is not hypothetical — it is what
+    # the first production run hit, with 345 sale rows held under a vocabulary
+    # the gate no longer accepts.
     owned: dict[str, int] = {}
     for r in conn.execute(
         f"SELECT {_WARD} AS w, COUNT(*) n FROM listings "
-        f"WHERE broker_agent_id = ? AND {type_where} "
+        f"WHERE broker_agent_id = ? AND {showable_where} "
         f"AND {_WARD} IS NOT NULL AND {_WARD} != '' GROUP BY w",
-        (args.broker_id,),
+        (args.broker_id, *showable_params),
     ).fetchall():
         owned[r["w"]] = r["n"]
 
