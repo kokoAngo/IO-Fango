@@ -149,6 +149,43 @@ LAN and ships an **artifact**; the app server never dials out to either.
 Schedule the LAN side with `scripts/city.fango.inventory-sync.plist`
 (a launchd agent; edit the paths and the delivery command inside it).
 
+### The visibility window
+
+Synced listings expire. A rental is hidden 7 days after its upstream posting
+date, a sale 90 days, both measured on `listings.posted_at`. Locally-created
+inventory (a broker's own rows, `source IS NULL`) has no upstream clock and
+never expires — expiring it would delete that broker's shopfront.
+
+This exists because we do not do 物件確認, and neither status column upstream is
+trustworthy on a fresh listing. Measured against the upstream 成約 records:
+8.4% of rentals are already contracted within 7 days of being posted, and ~12%
+of rentals contracted 3-4 months ago are *still* carried upstream as 広告可.
+Age is the only remaining lever, and it has a floor around 3.6% that no window
+can beat — 10% of rentals are gone within 24 hours of being posted.
+
+Widening the window costs accuracy roughly linearly: 1d 3.6%, 3d 6.0%,
+7d 8.4%, 30d 13.3%, 90d 15.5%. Sale is a different regime — upstream keeps
+`transaction_status` current there, and every ad-cleared sale row was updated
+within 90 days anyway, so its window costs no inventory and is really a
+backstop against a stalled sync.
+
+Two consequences worth knowing:
+
+* **A synced row with no `posted_at` is hidden**, not shown. An unknown age is
+  exactly what the window exists to catch. Every row from a completed sync
+  carries one, so this only bites on rows predating the column.
+* **The window is a dead-man's switch.** If the sync stops, inventory drains
+  and the site empties rather than advertising week-old listings. That is the
+  right failure direction, but it does mean a silent sync failure looks like a
+  slowly emptying site — worth an alert on the daily row count. Upstream itself
+  goes quiet for days at a time (お盆 2026 was four days with zero new rows),
+  and the 7-day pool dipped from ~4,600 to ~2,600 without anything being wrong.
+
+`export_inventory` ships only what is inside the window, so the artifact
+carries thousands of rows rather than tens of thousands; pass
+`--include-expired` to override. `sync_inventory.sh` seeds its first run from
+the window floor instead of sweeping all 355k upstream rentals.
+
 ### Why step 2 exists
 
 `--since` filters on `created_time` / `updated_at`, so the incremental pass

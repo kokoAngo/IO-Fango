@@ -113,7 +113,22 @@ sync"). What is left is everything downstream of "it works on the LAN machine".
       the first few cycles before trusting the schedule.
 - [ ] **`fetch_listing_images` has no retention.** `data/uploads/` is
       content-addressed and only ever grows; nothing prunes files whose
-      listings were retired (`ad_status='掲載終了'`).
+      listings were retired (`ad_status='掲載終了'`) or aged out of the window.
+- [ ] **Expired rows are never pruned.** The window hides them, and the export
+      stops shipping them, but they accumulate in SQLite on both sides. Needs a
+      periodic delete of `source='pg'` rows well past their window (plus the
+      photos only they referenced).
+- [ ] **No alert when the sync goes quiet.** The window is a dead-man's switch:
+      if the sync stops, the site empties over 7 days instead of showing stale
+      inventory. That is the right failure direction and an invisible one —
+      alert on the daily visible-row count. Note upstream itself goes quiet
+      (お盆 2026: four consecutive days with zero new rows, pool 4,600 → 2,600).
+- [ ] **賃貸 photos are still unaccounted for.** The window makes this sharper:
+      the visible rental pool is now ~4,600 rows with no pictures at all, while
+      sale rows have them.
+- [ ] **Residual おとり rate is ~8.4% on rentals** (measured, and a lower bound —
+      only 26% of listings matched a 成約 record). Recency cannot go below
+      ~3.6%; closing the gap needs 物件確認, which is out of scope by decision.
 
 ## Backend features the README quietly promises but we don't yet do
 
