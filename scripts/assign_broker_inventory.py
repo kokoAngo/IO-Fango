@@ -48,7 +48,10 @@ from fango.db import bootstrap, connect
 from fango.listings.service import (
     ADVERTISABLE_RENTAL_AD_STATUS,
     ADVERTISABLE_SALE_AD_STATUSES,
+    OFF_MARKET_RENTAL_STATUSES,
     OFF_MARKET_SALE_STATUSES,
+    WINDOWED_SOURCE,
+    window_start,
 )
 
 _ADMIN_SUFFIX = re.compile(r"[都道府県区市町村]+$")
@@ -100,11 +103,26 @@ def main(argv: list[str] | None = None) -> int:
     else:  # rental
         type_where = ("COALESCE(listings.transaction_type,'') != 'sale' "
                       "AND listings.rent_yen IS NOT NULL")
-        pool_where = type_where
+        # 成約済 is excluded even under --force-ad-status, for the same reason
+        # 成約/申込あり is on the sale side: an already-let flat is not a
+        # compliance preference, it is simply gone.
+        off_r = ",".join("?" * len(OFF_MARKET_RENTAL_STATUSES))
+        pool_where = f"{type_where} AND COALESCE(listings.tenancy_status,'') NOT IN ({off_r})"
+        pool_params += list(OFF_MARKET_RENTAL_STATUSES)
         if not args.force_ad_status:
             pool_where += " AND listings.ad_status = ?"
             pool_params.append(ADVERTISABLE_RENTAL_AD_STATUS)
         new_ad_status = ADVERTISABLE_RENTAL_AD_STATUS
+
+    # The visibility window applies here too. Handing a broker a listing that
+    # has aged out would put inventory in its shopfront that the public gate
+    # will not show — and, worse, that the broker would go on proposing to
+    # customers. Not overridable by --force-ad-status: that flag is about ad
+    # clearance on synthetic inventory, not about age.
+    pool_where += (f" AND (COALESCE(listings.source,'') != ?"
+                   f" OR (listings.posted_at IS NOT NULL AND listings.posted_at >= ?))")
+    pool_params.append(WINDOWED_SOURCE)
+    pool_params.append(window_start("sale" if args.transaction_type == "sale" else "rent"))
 
     bootstrap()
     conn = connect()
