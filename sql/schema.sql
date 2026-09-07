@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS listings (
     url                 TEXT,
     agent_company       TEXT,
     broker_agent_id     INTEGER REFERENCES agents(id),  -- owning broker (NULL = central/ingested 在庫)
+    source              TEXT,   -- 'pg' = synced from the upstream inventory DB; NULL = created here
     ad_status           TEXT,   -- source 「広告可」: 可/おすすめ/不可（…）/確認待ち/-- etc.
     raw_json            TEXT,
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

@@ -41,6 +41,11 @@ _LISTINGS_NEW_COLUMNS: tuple[tuple[str, str], ...] = (
     ("ad_status", "TEXT"),
     # Owning broker (中介) — NULL means central/ingested 在庫 visible to all.
     ("broker_agent_id", "INTEGER"),
+    # Provenance. 'pg' = synced from the upstream inventory database, which is
+    # what makes a row eligible for the reconcile pass (and, when it vanishes
+    # upstream, for retirement). A broker's own hand-created listing must NOT
+    # be retired just because no upstream row matches it, so it stays NULL.
+    ("source", "TEXT"),
 )
 
 # Columns added to consult_sessions after the table first shipped (auto-post
